@@ -340,6 +340,10 @@ def candles_to_frame(raw_candles: list[list[Any]]) -> pd.DataFrame:
         adjust=False,
     ).mean()
     frame["atr_percent"] = (frame["atr"] / frame["close"]) * 100
+
+    # Volume analysis: compare the latest candle with the recent 20-candle average.
+    frame["volume_avg20"] = frame["volume"].rolling(20).mean()
+    frame["volume_ratio"] = frame["volume"] / frame["volume_avg20"]
     return frame
 
 
@@ -595,7 +599,7 @@ with st.sidebar:
     st.markdown(
         """
         - **RSI (14):** momentum from 0 to 100.
-        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.\n        - **MACD (12, 26, 9):** momentum/trend indicator comparing two EMAs.\n        - **ATR (14):** volatility measure showing the market’s typical price range.
+        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.\n        - **MACD (12, 26, 9):** momentum/trend indicator comparing two EMAs.\n        - **ATR (14):** volatility measure showing the market’s typical price range.\n        - **Volume ratio:** current candle volume divided by the 20-candle average.
         - **Watch signals:** simple rules to help review conditions, not advice.
         """
     )
@@ -691,9 +695,15 @@ def show_market_dashboard() -> None:
             ("MACD", "macd", "#53d8f5"),
             ("MACD signal", "macd_signal", "#f2b84b"),
             ("ATR (14)", "atr", "#eaf7ff"),
+            ("Volume ratio", "volume_ratio", "#6cf2bf"),
         ):
             value = latest[column]
-            display_value = format_price(float(value)) if not pd.isna(value) else "Building…"
+            if pd.isna(value):
+                display_value = "Building…"
+            elif column == "volume_ratio":
+                display_value = f"{float(value):.2f}×"
+            else:
+                display_value = format_price(float(value))
             st.markdown(
                 f"""
                 <div style="padding: 13px 14px; margin: 0 0 10px;
@@ -713,6 +723,20 @@ def show_market_dashboard() -> None:
             st.caption(
                 f"ATR is {float(atr_percent):.2f}% of the current price — "
                 "a normalized view of current volatility."
+            )
+
+        volume_ratio = latest["volume_ratio"]
+        if not pd.isna(volume_ratio):
+            if volume_ratio >= 1.5:
+                volume_text = "High activity"
+            elif volume_ratio >= 1.0:
+                volume_text = "Above average"
+            elif volume_ratio >= 0.7:
+                volume_text = "Below average"
+            else:
+                volume_text = "Low activity"
+            st.caption(
+                f"Volume: {float(volume_ratio):.2f}× the 20-candle average · {volume_text}."
             )
 
         st.markdown(
