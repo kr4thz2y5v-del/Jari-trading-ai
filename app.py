@@ -768,6 +768,38 @@ def backtest_summary(results: pd.DataFrame) -> pd.DataFrame:
         )
     return pd.DataFrame(rows)
 
+
+def compare_score_thresholds(frame: pd.DataFrame) -> pd.DataFrame:
+    """Compare score thresholds and LONG/SHORT results separately."""
+    rows: list[dict[str, Any]] = []
+
+    for threshold in (65, 70, 75, 80):
+        results = run_backtest(frame, threshold)
+        if results.empty:
+            continue
+
+        for direction in ("ALL", "LONG", "SHORT"):
+            subset = results if direction == "ALL" else results[results["Direction"] == direction]
+            if subset.empty:
+                continue
+
+            for horizon in (5, 10, 20):
+                return_col = f"{horizon} candle return %"
+                win_col = f"{horizon} candle win"
+                rows.append(
+                    {
+                        "Min score": threshold,
+                        "Direction": direction,
+                        "Horizon": f"{horizon} candles",
+                        "Setups": len(subset),
+                        "Win rate": float(subset[win_col].mean() * 100),
+                        "Average return": float(subset[return_col].mean()),
+                        "Median return": float(subset[return_col].median()),
+                    }
+                )
+
+    return pd.DataFrame(rows)
+
 def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
     """Create a candlestick price chart with EMA overlays and an RSI panel."""
     figure = make_subplots(
@@ -1288,6 +1320,67 @@ def show_market_dashboard() -> None:
                     "10 candle return %": st.column_config.NumberColumn("10 candles", format="%+.2f%%"),
                     "20 candle return %": st.column_config.NumberColumn("20 candles", format="%+.2f%%"),
                 },
+            )
+
+        st.markdown("### Score threshold comparison")
+        st.markdown(
+            """
+            <div class="backtest-copy">
+                Compare 65 / 70 / 75 / 80 without changing the live JARVIS score.
+                LONG and SHORT setups are shown separately so weak sides of the strategy are easier to spot.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        comparison = compare_score_thresholds(selected_frame)
+        if comparison.empty:
+            st.info("Not enough historical setups for threshold comparison.")
+        else:
+            comparison_horizon = st.selectbox(
+                "Comparison horizon",
+                options=["5 candles", "10 candles", "20 candles"],
+                index=1,
+                key="comparison_horizon",
+            )
+            comparison_view = comparison[
+                comparison["Horizon"] == comparison_horizon
+            ].copy()
+
+            st.dataframe(
+                comparison_view[
+                    [
+                        "Min score",
+                        "Direction",
+                        "Setups",
+                        "Win rate",
+                        "Average return",
+                        "Median return",
+                    ]
+                ],
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Min score": st.column_config.NumberColumn("Min score", format="%d/100"),
+                    "Direction": st.column_config.TextColumn("Direction"),
+                    "Setups": st.column_config.NumberColumn("Setups", format="%d"),
+                    "Win rate": st.column_config.NumberColumn("Win rate", format="%.1f%%"),
+                    "Average return": st.column_config.NumberColumn(
+                        "Avg directional return", format="%+.2f%%"
+                    ),
+                    "Median return": st.column_config.NumberColumn(
+                        "Median directional return", format="%+.2f%%"
+                    ),
+                },
+            )
+            st.markdown(
+                """
+                <div class="backtest-note">
+                    Treat rows with very few setups cautiously. A high win rate from only a handful
+                    of historical signals is not strong evidence that the rule is reliable.
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
     st.warning(
