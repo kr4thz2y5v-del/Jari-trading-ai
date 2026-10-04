@@ -233,6 +233,125 @@ st.markdown(
             color: #d8eaf5 !important;
         }
 
+
+        /* ===== Global JARVIS readability pass ===== */
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+            color: #dcecf6 !important;
+        }
+
+        [data-testid="stAppViewContainer"] p,
+        [data-testid="stAppViewContainer"] li,
+        [data-testid="stAppViewContainer"] label,
+        [data-testid="stAppViewContainer"] span {
+            color: #b8cddd;
+        }
+
+        [data-testid="stAppViewContainer"] h1,
+        [data-testid="stAppViewContainer"] h2,
+        [data-testid="stAppViewContainer"] h3,
+        [data-testid="stAppViewContainer"] h4 {
+            color: #edf8ff !important;
+        }
+
+        [data-testid="stSidebar"] {
+            background: rgba(5, 18, 29, .98) !important;
+            border-right: 1px solid rgba(92, 211, 255, .14);
+        }
+
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] li,
+        [data-testid="stSidebar"] span {
+            color: #bcd2e1 !important;
+        }
+
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {
+            color: #edf8ff !important;
+        }
+
+        /* Select boxes */
+        div[data-baseweb="select"] > div {
+            background: #f7fbfe !important;
+            border-color: rgba(92, 211, 255, .25) !important;
+        }
+        div[data-baseweb="select"] span,
+        div[data-baseweb="select"] div {
+            color: #122638 !important;
+        }
+
+        /* Sliders */
+        div[data-testid="stSlider"] label,
+        div[data-testid="stSlider"] p {
+            color: #d8eaf5 !important;
+        }
+
+        /* Metrics */
+        [data-testid="stMetric"] {
+            background: rgba(12, 37, 55, .72);
+            border: 1px solid rgba(92, 211, 255, .18);
+            border-radius: 14px;
+            padding: 12px 14px;
+        }
+        [data-testid="stMetricLabel"] p {
+            color: #9fb9cb !important;
+        }
+        [data-testid="stMetricValue"] {
+            color: #f1f9ff !important;
+        }
+
+        /* Captions / muted helper text */
+        [data-testid="stCaptionContainer"],
+        [data-testid="stCaptionContainer"] p {
+            color: #9fb8c9 !important;
+        }
+
+        /* Dataframes */
+        div[data-testid="stDataFrame"] {
+            border: 1px solid rgba(92, 211, 255, .18);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        /* Expanders */
+        div[data-testid="stExpander"] details {
+            background: rgba(9, 29, 44, .72) !important;
+            border: 1px solid rgba(92, 211, 255, .16) !important;
+            border-radius: 12px !important;
+        }
+        div[data-testid="stExpander"] summary,
+        div[data-testid="stExpander"] summary p {
+            color: #dcecf6 !important;
+        }
+
+        /* Alerts */
+        [data-testid="stAlert"] p {
+            color: #e3eff6 !important;
+        }
+
+        /* Dividers */
+        hr {
+            border-color: rgba(92, 211, 255, .14) !important;
+        }
+
+        /* Existing custom text classes */
+        .soft-note, .signal-copy {
+            color: #afc6d6 !important;
+        }
+        .eyebrow {
+            color: #58ddff !important;
+        }
+
+        /* Plotly chart labels are rendered inside the chart; give chart container contrast */
+        [data-testid="stPlotlyChart"] {
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
 </style>
     """,
     unsafe_allow_html=True,
