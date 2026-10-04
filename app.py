@@ -323,6 +323,23 @@ def candles_to_frame(raw_candles: list[list[Any]]) -> pd.DataFrame:
     frame["macd"] = ema12 - ema26
     frame["macd_signal"] = frame["macd"].ewm(span=9, adjust=False).mean()
     frame["macd_hist"] = frame["macd"] - frame["macd_signal"]
+
+    # ATR (14): Wilder-style volatility measure.
+    previous_close = frame["close"].shift(1)
+    true_range = pd.concat(
+        [
+            frame["high"] - frame["low"],
+            (frame["high"] - previous_close).abs(),
+            (frame["low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    frame["atr"] = true_range.ewm(
+        alpha=1 / 14,
+        min_periods=14,
+        adjust=False,
+    ).mean()
+    frame["atr_percent"] = (frame["atr"] / frame["close"]) * 100
     return frame
 
 
@@ -578,7 +595,7 @@ with st.sidebar:
     st.markdown(
         """
         - **RSI (14):** momentum from 0 to 100.
-        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.\n        - **MACD (12, 26, 9):** momentum/trend indicator comparing two EMAs.
+        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.\n        - **MACD (12, 26, 9):** momentum/trend indicator comparing two EMAs.\n        - **ATR (14):** volatility measure showing the market’s typical price range.
         - **Watch signals:** simple rules to help review conditions, not advice.
         """
     )
@@ -673,6 +690,7 @@ def show_market_dashboard() -> None:
             ("EMA200", "ema200", "#f2b84b"),
             ("MACD", "macd", "#53d8f5"),
             ("MACD signal", "macd_signal", "#f2b84b"),
+            ("ATR (14)", "atr", "#eaf7ff"),
         ):
             value = latest[column]
             display_value = format_price(float(value)) if not pd.isna(value) else "Building…"
@@ -690,6 +708,13 @@ def show_market_dashboard() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+        atr_percent = latest["atr_percent"]
+        if not pd.isna(atr_percent):
+            st.caption(
+                f"ATR is {float(atr_percent):.2f}% of the current price — "
+                "a normalized view of current volatility."
+            )
+
         st.markdown(
             f"""
             <div style="padding: 13px 14px; margin-top: 14px;
