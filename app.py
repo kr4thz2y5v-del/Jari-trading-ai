@@ -192,7 +192,48 @@ st.markdown(
         border-radius: 12px;
         overflow: hidden;
     }
-    </style>
+    
+        /* Backtest readability */
+        .backtest-panel {
+            margin-top: 8px;
+            padding: 18px 18px 12px 18px;
+            border: 1px solid rgba(92, 211, 255, .18);
+            border-radius: 16px;
+            background: rgba(8, 27, 42, .72);
+        }
+        .backtest-panel h3 {
+            color: #eaf7ff !important;
+            margin: 0 0 8px 0;
+        }
+        .backtest-copy {
+            color: #a9c0d3 !important;
+            line-height: 1.55;
+            margin-bottom: 8px;
+        }
+        .backtest-note {
+            color: #91aabd !important;
+            line-height: 1.5;
+            margin-top: 10px;
+        }
+        div[data-testid="stSlider"] label,
+        div[data-testid="stSlider"] p {
+            color: #d8eaf5 !important;
+        }
+        div[data-testid="stDataFrame"] {
+            border: 1px solid rgba(92, 211, 255, .16);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        div[data-testid="stExpander"] details {
+            border-color: rgba(92, 211, 255, .16) !important;
+            background: rgba(8, 27, 42, .58) !important;
+        }
+        div[data-testid="stExpander"] summary,
+        div[data-testid="stExpander"] summary p {
+            color: #d8eaf5 !important;
+        }
+
+</style>
     """,
     unsafe_allow_html=True,
 )
@@ -1054,11 +1095,18 @@ def show_market_dashboard() -> None:
         unsafe_allow_html=True,
     )
     st.divider()
-    st.markdown('<div class="eyebrow">Strategy laboratory</div>', unsafe_allow_html=True)
-    st.subheader("Backtest v1")
-    st.caption(
-        "Historical test of the current JARVIS Setup Score on the selected coin and timeframe. "
-        "Each historical signal uses only data available up to that candle."
+    st.markdown('<div class="eyebrow">STRATEGY LABORATORY</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="backtest-panel">
+            <h3>Backtest v1</h3>
+            <div class="backtest-copy">
+                Historical test of the current JARVIS Setup Score for the selected coin and timeframe.
+                Each signal uses only information that was available at that candle.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     threshold = st.select_slider(
@@ -1093,9 +1141,14 @@ def show_market_dashboard() -> None:
                 ),
             },
         )
-        st.caption(
-            "A 'win' means price was in the setup direction at that future candle. "
-            "Returns exclude fees, spread and slippage, so this is research data—not live-trading performance."
+        st.markdown(
+            """
+            <div class="backtest-note">
+                <b>How to read this:</b> a win means price was in the setup direction at that future candle.
+                Returns exclude fees, spread and slippage, so these are research results—not live-trading performance.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
         with st.expander("Show historical setups"):
