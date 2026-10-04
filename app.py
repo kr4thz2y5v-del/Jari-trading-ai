@@ -316,6 +316,7 @@ def candles_to_frame(raw_candles: list[list[Any]]) -> pd.DataFrame:
     frame.loc[(average_gain == 0) & (average_loss == 0), "rsi"] = 50
     frame["ema20"] = frame["close"].ewm(span=20, min_periods=20, adjust=False).mean()
     frame["ema50"] = frame["close"].ewm(span=50, min_periods=50, adjust=False).mean()
+    frame["ema200"] = frame["close"].ewm(span=200, min_periods=200, adjust=False).mean()
     return frame
 
 
@@ -389,7 +390,7 @@ def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
         shared_xaxes=True,
         vertical_spacing=0.08,
         row_heights=[0.72, 0.28],
-        subplot_titles=("Price with EMA20 and EMA50", "RSI (14)"),
+        subplot_titles=("Price with EMA20, EMA50 and EMA200", "RSI (14)"),
     )
 
     figure.add_trace(
@@ -424,6 +425,16 @@ def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
             y=frame["ema50"],
             name="EMA50",
             line={"color": "#b697ff", "width": 1.6},
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=frame["time"],
+            y=frame["ema200"],
+            name="EMA200",
+            line={"color": "#f2b84b", "width": 1.6},
         ),
         row=1,
         col=1,
@@ -507,8 +518,8 @@ with st.sidebar:
     )
     candle_count = st.select_slider(
         "Chart history",
-        options=[100, 180, 300],
-        value=180,
+        options=[250, 300, 500],
+        value=300,
         help="More candles show a longer history and take slightly longer to load.",
     )
     refresh_seconds = st.selectbox(
@@ -522,7 +533,7 @@ with st.sidebar:
     st.markdown(
         """
         - **RSI (14):** momentum from 0 to 100.
-        - **EMA20 / EMA50:** average price lines that react at different speeds.
+        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.
         - **Watch signals:** simple rules to help review conditions, not advice.
         """
     )
@@ -601,7 +612,7 @@ def show_market_dashboard() -> None:
     with chart_col:
         st.subheader(f"{selected_symbol.removesuffix('USDT')} / USDT price chart")
         st.caption(
-            f"{selected_timeframe_label} candles · EMA20 and EMA50 on price · RSI below"
+            f"{selected_timeframe_label} candles · EMA20, EMA50 and EMA200 on price · RSI below"
         )
         st.plotly_chart(
             build_price_chart(selected_frame, selected_symbol.removesuffix("USDT")),
@@ -614,6 +625,7 @@ def show_market_dashboard() -> None:
             ("Current candle close", "close", "#eaf7ff"),
             ("EMA20", "ema20", "#53d8f5"),
             ("EMA50", "ema50", "#b697ff"),
+            ("EMA200", "ema200", "#f2b84b"),
         ):
             value = latest[column]
             display_value = format_price(float(value)) if not pd.isna(value) else "Building…"
