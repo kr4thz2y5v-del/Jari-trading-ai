@@ -546,6 +546,68 @@ def signal_explanation(signal: str, frame: pd.DataFrame) -> str:
     return "The selected indicator conditions do not currently line up. Waiting is also a valid signal."
 
 
+
+def run_backtest(frame: pd.DataFrame, min_score: int = 65) -> pd.DataFrame:
+    """Evaluate historical setups using only information available at each candle."""
+    rows: list[dict[str, Any]] = []
+    horizons = (5, 10, 20)
+    max_horizon = max(horizons)
+
+    if len(frame) < 220:
+        return pd.DataFrame()
+
+    # EMA200 needs history. Stop early enough that future candles exist for evaluation.
+    for index in range(199, len(frame) - max_horizon):
+        history = frame.iloc[: index + 1]
+        setup = get_setup_score(history)
+
+        if setup["direction"] not in ("LONG SETUP", "SHORT SETUP"):
+            continue
+        if setup["score"] < min_score:
+            continue
+
+        entry = float(frame.iloc[index]["close"])
+        direction_multiplier = 1 if setup["direction"] == "LONG SETUP" else -1
+
+        row: dict[str, Any] = {
+            "Time": frame.iloc[index]["time"],
+            "Direction": setup["direction"].replace(" SETUP", ""),
+            "Score": setup["score"],
+            "Entry": entry,
+        }
+
+        for horizon in horizons:
+            future_close = float(frame.iloc[index + horizon]["close"])
+            raw_return = ((future_close / entry) - 1) * 100
+            directional_return = raw_return * direction_multiplier
+            row[f"{horizon} candle return %"] = directional_return
+            row[f"{horizon} candle win"] = directional_return > 0
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def backtest_summary(results: pd.DataFrame) -> pd.DataFrame:
+    """Create compact performance statistics for 5/10/20-candle horizons."""
+    if results.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, Any]] = []
+    for horizon in (5, 10, 20):
+        return_column = f"{horizon} candle return %"
+        win_column = f"{horizon} candle win"
+        rows.append(
+            {
+                "Horizon": f"{horizon} candles",
+                "Setups": len(results),
+                "Win rate": float(results[win_column].mean() * 100),
+                "Average return": float(results[return_column].mean()),
+                "Median return": float(results[return_column].median()),
+            }
+        )
+    return pd.DataFrame(rows)
+
 def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
     """Create a candlestick price chart with EMA overlays and an RSI panel."""
     figure = make_subplots(
@@ -991,6 +1053,71 @@ def show_market_dashboard() -> None:
         f'{refresh_seconds} seconds · Source: Kraken public market data</p>',
         unsafe_allow_html=True,
     )
+    st.divider()
+    st.markdown('<div class="eyebrow">Strategy laboratory</div>', unsafe_allow_html=True)
+    st.subheader("Backtest v1")
+    st.caption(
+        "Historical test of the current JARVIS Setup Score on the selected coin and timeframe. "
+        "Each historical signal uses only data available up to that candle."
+    )
+
+    threshold = st.select_slider(
+        "Minimum setup score for backtest",
+        options=[65, 70, 75, 80],
+        value=65,
+        key="backtest_threshold",
+    )
+
+    backtest_results = run_backtest(selected_frame, threshold)
+    summary = backtest_summary(backtest_results)
+
+    if summary.empty:
+        st.info(
+            "Not enough qualifying historical setups in the loaded chart history. "
+            "Try a lower score threshold or a different coin/timeframe."
+        )
+    else:
+        st.dataframe(
+            summary,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Horizon": st.column_config.TextColumn("Horizon"),
+                "Setups": st.column_config.NumberColumn("Setups", format="%d"),
+                "Win rate": st.column_config.NumberColumn("Win rate", format="%.1f%%"),
+                "Average return": st.column_config.NumberColumn(
+                    "Avg directional return", format="%+.2f%%"
+                ),
+                "Median return": st.column_config.NumberColumn(
+                    "Median directional return", format="%+.2f%%"
+                ),
+            },
+        )
+        st.caption(
+            "A 'win' means price was in the setup direction at that future candle. "
+            "Returns exclude fees, spread and slippage, so this is research data—not live-trading performance."
+        )
+
+        with st.expander("Show historical setups"):
+            display_results = backtest_results[
+                [
+                    "Time", "Direction", "Score", "Entry",
+                    "5 candle return %", "10 candle return %", "20 candle return %",
+                ]
+            ].copy()
+            st.dataframe(
+                display_results,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Score": st.column_config.NumberColumn("Score", format="%d/100"),
+                    "Entry": st.column_config.NumberColumn("Entry", format="$%.5f"),
+                    "5 candle return %": st.column_config.NumberColumn("5 candles", format="%+.2f%%"),
+                    "10 candle return %": st.column_config.NumberColumn("10 candles", format="%+.2f%%"),
+                    "20 candle return %": st.column_config.NumberColumn("20 candles", format="%+.2f%%"),
+                },
+            )
+
     st.warning(
         "Learning tool only. Signals are simple indicator rules, not financial advice. "
         "No trades are placed."
