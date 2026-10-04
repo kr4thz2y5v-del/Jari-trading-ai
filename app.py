@@ -317,6 +317,12 @@ def candles_to_frame(raw_candles: list[list[Any]]) -> pd.DataFrame:
     frame["ema20"] = frame["close"].ewm(span=20, min_periods=20, adjust=False).mean()
     frame["ema50"] = frame["close"].ewm(span=50, min_periods=50, adjust=False).mean()
     frame["ema200"] = frame["close"].ewm(span=200, min_periods=200, adjust=False).mean()
+
+    ema12 = frame["close"].ewm(span=12, adjust=False).mean()
+    ema26 = frame["close"].ewm(span=26, adjust=False).mean()
+    frame["macd"] = ema12 - ema26
+    frame["macd_signal"] = frame["macd"].ewm(span=9, adjust=False).mean()
+    frame["macd_hist"] = frame["macd"] - frame["macd_signal"]
     return frame
 
 
@@ -385,12 +391,16 @@ def signal_explanation(signal: str, frame: pd.DataFrame) -> str:
 def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
     """Create a candlestick price chart with EMA overlays and an RSI panel."""
     figure = make_subplots(
-        rows=2,
+        rows=3,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.08,
-        row_heights=[0.72, 0.28],
-        subplot_titles=("Price with EMA20, EMA50 and EMA200", "RSI (14)"),
+        vertical_spacing=0.07,
+        row_heights=[0.58, 0.21, 0.21],
+        subplot_titles=(
+            "Price with EMA20, EMA50 and EMA200",
+            "RSI (14)",
+            "MACD (12, 26, 9)",
+        ),
     )
 
     figure.add_trace(
@@ -451,6 +461,41 @@ def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
         row=2,
         col=1,
     )
+    figure.add_trace(
+        go.Scatter(
+            x=frame["time"],
+            y=frame["macd"],
+            name="MACD",
+            line={"color": "#53d8f5", "width": 1.5},
+        ),
+        row=3,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=frame["time"],
+            y=frame["macd_signal"],
+            name="MACD signal",
+            line={"color": "#f2b84b", "width": 1.4},
+        ),
+        row=3,
+        col=1,
+    )
+    figure.add_trace(
+        go.Bar(
+            x=frame["time"],
+            y=frame["macd_hist"],
+            name="MACD histogram",
+            marker_color="#6f8799",
+            opacity=0.55,
+        ),
+        row=3,
+        col=1,
+    )
+    figure.add_hline(
+        y=0, line_dash="dot", line_color="rgba(169, 192, 211, .35)", row=3, col=1
+    )
+
     figure.add_hline(
         y=70, line_dash="dot", line_color="rgba(255, 135, 149, .55)", row=2, col=1
     )
@@ -458,7 +503,7 @@ def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
         y=30, line_dash="dot", line_color="rgba(77, 226, 180, .55)", row=2, col=1
     )
     figure.update_layout(
-        height=600,
+        height=760,
         margin={"l": 10, "r": 10, "t": 48, "b": 12},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(6, 16, 27, .45)",
@@ -533,7 +578,7 @@ with st.sidebar:
     st.markdown(
         """
         - **RSI (14):** momentum from 0 to 100.
-        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.
+        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.\n        - **MACD (12, 26, 9):** momentum/trend indicator comparing two EMAs.
         - **Watch signals:** simple rules to help review conditions, not advice.
         """
     )
@@ -612,7 +657,7 @@ def show_market_dashboard() -> None:
     with chart_col:
         st.subheader(f"{selected_symbol.removesuffix('USDT')} / USDT price chart")
         st.caption(
-            f"{selected_timeframe_label} candles · EMA20, EMA50 and EMA200 on price · RSI below"
+            f"{selected_timeframe_label} candles · EMA20/50/200 · RSI · MACD below"
         )
         st.plotly_chart(
             build_price_chart(selected_frame, selected_symbol.removesuffix("USDT")),
@@ -626,6 +671,8 @@ def show_market_dashboard() -> None:
             ("EMA20", "ema20", "#53d8f5"),
             ("EMA50", "ema50", "#b697ff"),
             ("EMA200", "ema200", "#f2b84b"),
+            ("MACD", "macd", "#53d8f5"),
+            ("MACD signal", "macd_signal", "#f2b84b"),
         ):
             value = latest[column]
             display_value = format_price(float(value)) if not pd.isna(value) else "Building…"
