@@ -347,6 +347,143 @@ def candles_to_frame(raw_candles: list[list[Any]]) -> pd.DataFrame:
     return frame
 
 
+
+def get_setup_score(frame: pd.DataFrame) -> dict[str, Any]:
+    """Score long and short conditions separately using transparent indicator rules."""
+    if frame.empty:
+        return {"direction": "WAIT", "score": 0, "long_score": 0, "short_score": 0, "reasons": []}
+
+    latest = frame.iloc[-1]
+    required = (
+        "close", "ema20", "ema50", "ema200", "rsi",
+        "macd", "macd_signal", "atr_percent", "volume_ratio",
+    )
+    if any(pd.isna(latest[column]) for column in required):
+        return {"direction": "WAIT", "score": 0, "long_score": 0, "short_score": 0,
+                "reasons": ["Indicators are still building."]}
+
+    price = float(latest["close"])
+    ema20 = float(latest["ema20"])
+    ema50 = float(latest["ema50"])
+    ema200 = float(latest["ema200"])
+    rsi = float(latest["rsi"])
+    macd = float(latest["macd"])
+    macd_signal = float(latest["macd_signal"])
+    atr_pct = float(latest["atr_percent"])
+    volume_ratio = float(latest["volume_ratio"])
+
+    long_score = 0
+    short_score = 0
+    long_reasons: list[str] = []
+    short_reasons: list[str] = []
+
+    # Trend: max 30 points.
+    if price > ema20 > ema50 > ema200:
+        long_score += 30
+        long_reasons.append("Strong bullish EMA structure")
+    elif price > ema50 > ema200:
+        long_score += 20
+        long_reasons.append("Bullish medium/long trend")
+    elif price > ema200:
+        long_score += 10
+        long_reasons.append("Price above EMA200")
+
+    if price < ema20 < ema50 < ema200:
+        short_score += 30
+        short_reasons.append("Strong bearish EMA structure")
+    elif price < ema50 < ema200:
+        short_score += 20
+        short_reasons.append("Bearish medium/long trend")
+    elif price < ema200:
+        short_score += 10
+        short_reasons.append("Price below EMA200")
+
+    # Momentum: max 30 points.
+    if macd > macd_signal:
+        long_score += 15
+        long_reasons.append("MACD bullish")
+    elif macd < macd_signal:
+        short_score += 15
+        short_reasons.append("MACD bearish")
+
+    if 50 <= rsi <= 68:
+        long_score += 15
+        long_reasons.append("RSI supports bullish momentum")
+    elif 32 <= rsi < 50:
+        short_score += 15
+        short_reasons.append("RSI supports bearish momentum")
+    elif 68 < rsi < 75:
+        long_score += 7
+        long_reasons.append("Bullish RSI, but getting extended")
+    elif 25 < rsi < 32:
+        short_score += 7
+        short_reasons.append("Bearish RSI, but getting extended")
+
+    # Volume confirmation: max 20 points.
+    if volume_ratio >= 1.5:
+        if long_score >= short_score:
+            long_score += 20
+            long_reasons.append("High volume confirmation")
+        else:
+            short_score += 20
+            short_reasons.append("High volume confirmation")
+    elif volume_ratio >= 1.0:
+        if long_score >= short_score:
+            long_score += 12
+            long_reasons.append("Above-average volume")
+        else:
+            short_score += 12
+            short_reasons.append("Above-average volume")
+    elif volume_ratio >= 0.7:
+        if long_score >= short_score:
+            long_score += 6
+        else:
+            short_score += 6
+
+    # Volatility quality: max 20 points. Extremely quiet or very wild markets score less.
+    if 0.35 <= atr_pct <= 2.5:
+        volatility_points = 20
+        volatility_reason = "Usable volatility"
+    elif 0.20 <= atr_pct < 0.35 or 2.5 < atr_pct <= 4.0:
+        volatility_points = 10
+        volatility_reason = "Moderate setup volatility"
+    else:
+        volatility_points = 0
+        volatility_reason = "Volatility outside preferred range"
+
+    if long_score >= short_score:
+        long_score += volatility_points
+        if volatility_points:
+            long_reasons.append(volatility_reason)
+    else:
+        short_score += volatility_points
+        if volatility_points:
+            short_reasons.append(volatility_reason)
+
+    long_score = min(long_score, 100)
+    short_score = min(short_score, 100)
+
+    if long_score >= 65 and long_score >= short_score + 10:
+        direction = "LONG SETUP"
+        score = long_score
+        reasons = long_reasons
+    elif short_score >= 65 and short_score >= long_score + 10:
+        direction = "SHORT SETUP"
+        score = short_score
+        reasons = short_reasons
+    else:
+        direction = "WAIT"
+        score = max(long_score, short_score)
+        reasons = long_reasons if long_score >= short_score else short_reasons
+
+    return {
+        "direction": direction,
+        "score": int(score),
+        "long_score": int(long_score),
+        "short_score": int(short_score),
+        "reasons": reasons[:4],
+    }
+
 def get_signal(frame: pd.DataFrame) -> str:
     """Apply a small, transparent rule set; this never places an order."""
     if frame.empty:
@@ -599,7 +736,7 @@ with st.sidebar:
     st.markdown(
         """
         - **RSI (14):** momentum from 0 to 100.
-        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.\n        - **MACD (12, 26, 9):** momentum/trend indicator comparing two EMAs.\n        - **ATR (14):** volatility measure showing the market’s typical price range.\n        - **Volume ratio:** current candle volume divided by the 20-candle average.
+        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.\n        - **MACD (12, 26, 9):** momentum/trend indicator comparing two EMAs.\n        - **ATR (14):** volatility measure showing the market’s typical price range.\n        - **Volume ratio:** current candle volume divided by the 20-candle average.\n        - **JARVIS Setup Score:** transparent 0–100 rule score, not a probability of profit.
         - **Watch signals:** simple rules to help review conditions, not advice.
         """
     )
@@ -636,6 +773,7 @@ def show_market_dashboard() -> None:
     change_24h = ((current_price / open_24h) - 1) * 100 if open_24h else 0.0
     rsi = float(latest["rsi"]) if not pd.isna(latest["rsi"]) else None
     signal = get_signal(selected_frame)
+    setup = get_setup_score(selected_frame)
     trend = get_trend(selected_frame)
     signal_class = {
         "Buy watch": "signal-buy",
@@ -660,6 +798,30 @@ def show_market_dashboard() -> None:
     metric_columns[1].metric("24h change", f"{change_24h:+.2f}%")
     metric_columns[2].metric("RSI (14)", f"{rsi:.1f}" if rsi is not None else "—")
     metric_columns[3].metric("EMA trend", trend)
+
+    setup_direction = setup["direction"]
+    setup_score = setup["score"]
+    setup_reasons = " · ".join(setup["reasons"]) if setup["reasons"] else "No strong alignment yet."
+    setup_class = (
+        "signal-buy" if setup_direction == "LONG SETUP"
+        else "signal-sell" if setup_direction == "SHORT SETUP"
+        else "signal-wait"
+    )
+    st.markdown(
+        f"""
+        <div class="signal-box">
+            <div class="eyebrow">JARVIS Setup Score · {selected_symbol.removesuffix('USDT')} / USDT</div>
+            <div style="margin-top: 11px;">
+                <span class="signal-label {setup_class}">{setup_direction} · {setup_score}/100</span>
+            </div>
+            <div class="signal-copy">{setup_reasons}</div>
+            <div class="soft-note" style="margin-top:8px;">
+                Long {setup["long_score"]}/100 · Short {setup["short_score"]}/100 · Rule score, not profit probability.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown(
         f"""
@@ -775,6 +937,7 @@ def show_market_dashboard() -> None:
 
         coin_latest = coin_frame.iloc[-1]
         coin_signal = get_signal(coin_frame)
+        coin_setup = get_setup_score(coin_frame)
         close = float(coin_ticker.get("c", [coin_latest["close"]])[0])
         rsi_value = coin_latest["rsi"]
         watch_rows.append(
@@ -788,6 +951,8 @@ def show_market_dashboard() -> None:
                 ),
                 "RSI (14)": float(rsi_value) if not pd.isna(rsi_value) else None,
                 "EMA trend": get_trend(coin_frame),
+                "Setup": coin_setup["direction"],
+                "Score": coin_setup["score"],
                 "Signal": coin_signal,
             }
         )
@@ -808,6 +973,8 @@ def show_market_dashboard() -> None:
                 ),
                 "RSI (14)": st.column_config.NumberColumn("RSI (14)", format="%.1f"),
                 "EMA trend": st.column_config.TextColumn("EMA trend"),
+                "Setup": st.column_config.TextColumn("JARVIS setup"),
+                "Score": st.column_config.NumberColumn("Score", format="%d/100"),
                 "Signal": st.column_config.TextColumn("Signal"),
             },
         )
