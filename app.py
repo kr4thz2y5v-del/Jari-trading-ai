@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -1779,7 +1779,7 @@ with st.sidebar:
         candle_count = st.select_slider("Chart history", options=[250, 300, 500], value=300)
         refresh_seconds = st.selectbox("Auto-refresh", [15, 30, 60], index=1, format_func=lambda seconds: f"Every {seconds} seconds")
     else:
-        selected_symbol, selected_timeframe_label, candle_count, refresh_seconds = "BTCUSDT", "1h", 300, 30
+        selected_symbol, selected_timeframe_label, candle_count, refresh_seconds = "BTCUSDT", "1 hour", 300, 30
     st.divider()
     st.caption("Read-only market intelligence · No wallet connected · No trades placed")
 
