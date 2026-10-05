@@ -1053,7 +1053,25 @@ def load_solana_early_radar() -> pd.DataFrame:
             market_cap = pair.get("marketCap")
             fdv = pair.get("fdv")
             links = profile.get("links") or []
-            socials = ", ".join(filter(None, [x.get("type") or x.get("label") for x in links])) or "—"
+            social_items = []
+            social_urls = []
+            for link in links:
+                kind = str(link.get("type") or link.get("label") or "link").strip()
+                url = str(link.get("url") or "").strip()
+                if url:
+                    social_items.append(kind)
+                    social_urls.append(url)
+            socials = ", ".join(social_items) or "—"
+            info = pair.get("info") or {}
+            pair_socials = info.get("socials") or []
+            for item in pair_socials:
+                platform = str(item.get("platform") or "").strip()
+                handle = str(item.get("handle") or "").strip()
+                if platform and platform.lower() not in [x.lower() for x in social_items]:
+                    social_items.append(platform)
+                if platform and handle:
+                    social_urls.append(f"{platform}: {handle}")
+            boosts_active = int(((pair.get("boosts") or {}).get("active") or 0))
             return {
                 "Token": base.get("name") or "Unknown",
                 "Ticker": base.get("symbol") or "—",
@@ -1065,7 +1083,10 @@ def load_solana_early_radar() -> pd.DataFrame:
                 "Volume 1h": vol.get("h1"),
                 "Buys 1h": tx_h1.get("buys"),
                 "Sells 1h": tx_h1.get("sells"),
-                "Social links": socials,
+                "Social links": ", ".join(social_items) or socials,
+                "Social refs": " | ".join(social_urls) or "—",
+                "Profile description": str(profile.get("description") or ""),
+                "DEX boosts": boosts_active,
                 "DEX Screener": pair.get("url") or profile.get("url"),
             }
         except (requests.RequestException, ValueError, TypeError):
@@ -1192,11 +1213,106 @@ def safety_assessment(row: pd.Series, chain: dict) -> tuple[int, str, list[str]]
     return risk, label, reasons
 
 
+CELEBRITY_CATALYST_WORDS = {
+    "trump": "Trump",
+    "elon": "Elon Musk",
+    "musk": "Elon Musk",
+    "mrbeast": "MrBeast",
+    "kanye": "Kanye West",
+    "ye ": "Kanye West",
+    "ronaldo": "Cristiano Ronaldo",
+    "messi": "Lionel Messi",
+    "tate": "Andrew Tate",
+}
+
+
+def social_potential_assessment(row: pd.Series, risk_points: int) -> tuple[int, str, str, list[str]]:
+    """Early-interest heuristic. This is not a return probability or verified celebrity endorsement."""
+    score = 0
+    reasons = []
+    liquidity = float(row.get("Liquidity") or 0)
+    market_cap = float(row.get("Market cap") or row.get("FDV") or 0)
+    volume = float(row.get("Volume 1h") or 0)
+    buys = float(row.get("Buys 1h") or 0)
+    sells = float(row.get("Sells 1h") or 0)
+    age = float(row.get("Age (h)") or 999)
+    boosts = int(row.get("DEX boosts") or 0)
+    social_text = str(row.get("Social links") or "").lower()
+    searchable = " ".join([
+        str(row.get("Token") or ""), str(row.get("Ticker") or ""),
+        str(row.get("Profile description") or ""), str(row.get("Social refs") or "")
+    ]).lower()
+
+    # Market activity: 55 points max.
+    if liquidity >= 100_000: score += 15; reasons.append("strong liquidity")
+    elif liquidity >= 50_000: score += 11; reasons.append("solid liquidity")
+    elif liquidity >= 25_000: score += 7
+    if volume >= 250_000: score += 15; reasons.append("very high 1h volume")
+    elif volume >= 100_000: score += 12; reasons.append("high 1h volume")
+    elif volume >= 25_000: score += 7
+    total_tx = buys + sells
+    if total_tx >= 100 and buys > sells * 1.35: score += 15; reasons.append("buyers clearly lead")
+    elif total_tx >= 40 and buys > sells: score += 9; reasons.append("buyers lead")
+    elif total_tx >= 20: score += 4
+    if age <= 6: score += 10; reasons.append("very early pair")
+    elif age <= 24: score += 6
+
+    # Public-profile attention proxies: 25 points max. DEX boosts are paid attention, not organic social proof.
+    social_count = sum(k in social_text for k in ("twitter", "x", "telegram", "discord", "youtube", "tiktok"))
+    if social_count >= 3: score += 10; reasons.append("multiple social channels")
+    elif social_count >= 1: score += 5; reasons.append("social channel present")
+    if boosts >= 50: score += 15; reasons.append("heavy DEX promotion")
+    elif boosts >= 10: score += 10; reasons.append("DEX promotion active")
+    elif boosts > 0: score += 5; reasons.append("some DEX promotion")
+
+    # Valuation headroom proxy: 10 points max. This does not predict a target market cap.
+    if 0 < market_cap <= 2_000_000: score += 10; reasons.append("small valuation / more theoretical headroom")
+    elif market_cap <= 10_000_000 and market_cap > 0: score += 6
+    elif market_cap <= 50_000_000 and market_cap > 0: score += 3
+
+    # Keep safety separate, but cap hype when observed risk is severe.
+    if risk_points >= 55:
+        score = min(score, 49)
+        reasons.append("potential capped because safety risk is HIGH")
+    elif risk_points >= 25:
+        score = max(0, score - 8)
+        reasons.append("medium safety risk penalty")
+
+    claims = sorted({label for word, label in CELEBRITY_CATALYST_WORDS.items() if word in searchable})
+    catalyst = ", ".join(claims) if claims else "—"
+    if claims:
+        reasons.append("celebrity name detected — NOT verified as endorsement")
+
+    score = max(0, min(100, int(score)))
+    label = "🔥 HIGH INTEREST" if score >= 70 else "👀 WATCH" if score >= 50 else "⚪ EARLY/WEAK"
+    return score, label, catalyst, reasons
+
+
+def market_cap_scenarios(market_cap) -> str:
+    try:
+        mc = float(market_cap or 0)
+    except (TypeError, ValueError):
+        return "—"
+    if mc <= 0:
+        return "—"
+    targets = []
+    for multiple in (2, 3, 5, 10):
+        target = mc * multiple
+        if target < 1_000_000:
+            text = f"${target/1_000:.0f}k"
+        elif target < 1_000_000_000:
+            text = f"${target/1_000_000:.1f}M"
+        else:
+            text = f"${target/1_000_000_000:.2f}B"
+        targets.append(f"{multiple}×→{text}")
+    return " · ".join(targets)
+
+
 def show_early_radar() -> None:
-    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V2</div>', unsafe_allow_html=True)
+    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V3</div>', unsafe_allow_html=True)
     st.subheader("🔥 New Solana token radar")
     st.caption(
-        "Discovery + safety layer. Identify every token by its exact Solana contract/mint address — names and tickers can be copied."
+        "Discovery + safety + early-interest layer. Potential Score is a transparent attention/momentum heuristic — NOT a probability of profit. Identify tokens by exact contract address."
     )
     radar = load_solana_early_radar()
     if radar.empty:
@@ -1228,15 +1344,24 @@ def show_early_radar() -> None:
             item["Mint authority"] = "ACTIVE ⚠️" if chain.get("Mint authority") else ("Revoked ✓" if chain.get("On-chain checked") else "Unknown")
             item["Freeze authority"] = "ACTIVE ⚠️" if chain.get("Freeze authority") else ("Revoked ✓" if chain.get("On-chain checked") else "Unknown")
             item["Top 20 holders"] = chain.get("Top 20 %")
+            potential, potential_label, celebrity_claim, potential_reasons = social_potential_assessment(row, score)
+            item["Potential"] = potential
+            item["Interest"] = potential_label
+            item["Celebrity/catalyst"] = celebrity_claim
+            item["Potential why"] = " · ".join(potential_reasons)
+            item["MC scenarios"] = market_cap_scenarios(row.get("Market cap") or row.get("FDV"))
             item["Why"] = " · ".join(reasons)
             enriched.append(item)
 
-    result = pd.DataFrame(enriched).sort_values(["Risk points", "Liquidity"], ascending=[True, False])
+    result = pd.DataFrame(enriched).sort_values(["Potential", "Risk points", "Liquidity"], ascending=[False, True, False])
+    st.markdown("### 🔥 Social / Momentum radar")
+    st.caption("Ranks early attention using DEX activity, social-link presence, promotion, age and valuation. Celebrity-name hits are UNVERIFIED until an official post and the exact contract address are matched.")
     st.dataframe(
-        result[["Risk", "Token", "Ticker", "Contract address", "Age (h)", "Market cap", "Liquidity", "Volume 1h", "Buys 1h", "Sells 1h", "Mint authority", "Freeze authority", "Top 20 holders", "Why", "DEX Screener"]],
+        result[["Interest", "Potential", "Risk", "Token", "Ticker", "Contract address", "Celebrity/catalyst", "Age (h)", "Market cap", "MC scenarios", "Liquidity", "Volume 1h", "Buys 1h", "Sells 1h", "DEX boosts", "Social links", "Potential why", "Mint authority", "Freeze authority", "Top 20 holders", "Why", "DEX Screener"]],
         hide_index=True,
         width="stretch",
         column_config={
+            "Potential": st.column_config.NumberColumn("Potential", format="%d/100"),
             "Age (h)": st.column_config.NumberColumn("Age", format="%.1f h"),
             "Market cap": st.column_config.NumberColumn("Market cap", format="$%.0f"),
             "Liquidity": st.column_config.NumberColumn("Liquidity", format="$%.0f"),
@@ -1251,7 +1376,11 @@ def show_early_radar() -> None:
         "Top-20 concentration is token-account concentration and can include pools/exchanges, so it is a screening signal rather than proof of insider ownership."
     )
     st.info(
-        "Next: Social/Celebrity verification + trend velocity + Potential Score. JARVIS will keep safety risk separate from upside potential."
+        "V3 social score is a first-pass proxy, not full social listening yet. A celebrity name only creates an UNVERIFIED catalyst flag. "
+        "The next upgrade is verified X/Reddit/Telegram trend velocity + Telegram alerts; those sources need their own API/bot credentials."
+    )
+    st.warning(
+        "MC scenarios are arithmetic what-if levels, not price targets or sell recommendations. A 5× scenario means the current market cap multiplied by five; JARVIS is not claiming it will reach that level."
     )
 
 
