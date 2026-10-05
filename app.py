@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -352,6 +352,10 @@ st.markdown(
             overflow: hidden;
         }
 
+
+    [data-testid="stSidebar"] [role="radiogroup"] label {padding: 8px 10px; border-radius: 10px; margin: 2px 0;}
+    [data-testid="stSidebar"] [role="radiogroup"] label:hover {background: rgba(56, 189, 248, .08);}
+    div[data-testid="stButton"] > button {border-radius: 10px;}
 </style>
     """,
     unsafe_allow_html=True,
@@ -1609,10 +1613,11 @@ def show_early_radar() -> None:
     st.caption(
         "Discovery + safety + early-interest layer. Potential Score is a transparent attention/momentum heuristic — NOT a probability of profit. Identify tokens by exact contract address."
     )
-    telegram_test_panel()
-    prediction_journal_panel()
-    alert_mode, alert_min_potential, alert_risk_limit = alert_control_panel()
-    st.divider()
+    # V8 facelift: technical tools live on their own pages.
+    alert_mode = st.session_state.get("telegram_alert_mode", "⚫ OFF")
+    alert_min_potential = st.session_state.get("telegram_min_potential", 75)
+    max_risk = st.session_state.get("telegram_max_risk", "MEDIUM")
+    alert_risk_limit = {"LOWER": 0, "MEDIUM": 1, "HIGH": 2}.get(max_risk, 1)
     radar = load_solana_early_radar()
     if radar.empty:
         st.warning("Early Radar did not receive token data right now. Try refreshing in a moment.")
@@ -1753,7 +1758,7 @@ st.markdown(
         <div class="jari-mark">◈</div>
         <div>
             <div class="jari-title">JARI TRADIN AI</div>
-            <div class="jari-subtitle">Crypto market intelligence · Kraken public data</div>
+            <div class="jari-subtitle">Market intelligence · Crypto · Early Radar · Stocks ready</div>
         </div>
     </div>
     """,
@@ -1764,47 +1769,21 @@ st.caption(
 )
 
 with st.sidebar:
-    st.markdown('<div class="eyebrow">Control room</div>', unsafe_allow_html=True)
-    st.title("Dashboard settings")
-    selected_symbol = st.selectbox(
-        "Coin to chart",
-        WATCH_SYMBOLS,
-        index=WATCH_SYMBOLS.index("BTCUSDT"),
-        format_func=lambda symbol: f"{symbol.removesuffix('USDT')} / USDT",
-    )
-    selected_timeframe_label = st.selectbox(
-        "Candle size",
-        list(TIMEFRAMES.keys()),
-        index=1,
-        help="A candle groups prices over this amount of time.",
-    )
-    candle_count = st.select_slider(
-        "Chart history",
-        options=[250, 300, 500],
-        value=300,
-        help="More candles show a longer history and take slightly longer to load.",
-    )
-    refresh_seconds = st.selectbox(
-        "Auto-refresh",
-        [15, 30, 60],
-        index=1,
-        format_func=lambda seconds: f"Every {seconds} seconds",
-    )
+    st.markdown('<div class="eyebrow">JARVIS NAVIGATION</div>', unsafe_allow_html=True)
+    app_page = st.radio("Navigate", ["🏠 Dashboard", "₿ Crypto", "🔥 Early Radar", "📈 Stocks", "🧠 Journal / Performance", "🔔 Alerts", "⚙️ Settings / Diagnostics"], index=0, label_visibility="collapsed")
     st.divider()
-    st.markdown('<div class="eyebrow">Indicator guide</div>', unsafe_allow_html=True)
-    st.markdown(
-        """
-        - **RSI (14):** momentum from 0 to 100.
-        - **EMA20 / EMA50 / EMA200:** average price lines that react at different speeds.\n        - **MACD (12, 26, 9):** momentum/trend indicator comparing two EMAs.\n        - **ATR (14):** volatility measure showing the market’s typical price range.\n        - **Volume ratio:** current candle volume divided by the 20-candle average.\n        - **JARVIS Setup Score:** transparent 0–100 rule score, not a probability of profit.
-        - **Watch signals:** simple rules to help review conditions, not advice.
-        """
-    )
-    st.caption("All market data comes from Kraken's public API. No API key is used.")
+    if app_page == "₿ Crypto":
+        st.markdown('<div class="eyebrow">CRYPTO CONTROLS</div>', unsafe_allow_html=True)
+        selected_symbol = st.selectbox("Coin to chart", WATCH_SYMBOLS, index=WATCH_SYMBOLS.index("BTCUSDT"), format_func=lambda symbol: f"{symbol.removesuffix('USDT')} / USDT")
+        selected_timeframe_label = st.selectbox("Candle size", list(TIMEFRAMES.keys()), index=1)
+        candle_count = st.select_slider("Chart history", options=[250, 300, 500], value=300)
+        refresh_seconds = st.selectbox("Auto-refresh", [15, 30, 60], index=1, format_func=lambda seconds: f"Every {seconds} seconds")
+    else:
+        selected_symbol, selected_timeframe_label, candle_count, refresh_seconds = "BTCUSDT", "1h", 300, 30
+    st.divider()
+    st.caption("Read-only market intelligence · No wallet connected · No trades placed")
 
 selected_interval = TIMEFRAMES[selected_timeframe_label]
-
-st.sidebar.divider()
-app_page = st.sidebar.radio("JARVIS module", ["Market Dashboard", "🔥 Early Radar"], index=0)
 
 
 @st.fragment(run_every=f"{refresh_seconds}s")
@@ -2204,7 +2183,101 @@ def show_market_dashboard() -> None:
     )
 
 
-if app_page == "🔥 Early Radar":
-    show_early_radar()
-else:
-    show_market_dashboard()
+
+def show_home_dashboard() -> None:
+    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS COMMAND CENTER · V8</div>', unsafe_allow_html=True)
+    st.subheader("🏠 Market overview")
+    st.caption("V8 is a usability and visual facelift. The V7 analysis engine stays intact.")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.metric("Crypto engine", "ONLINE")
+    with c2: st.metric("Early Radar", "ONLINE")
+    with c3:
+        journal, err = load_prediction_journal(100)
+        st.metric("Saved predictions", len(journal) if not err else "—")
+    with c4: st.metric("Stocks", "COMING SOON")
+    st.markdown("### Market Pulse")
+    try:
+        tickers, candles, error = load_market_snapshot(TIMEFRAMES["1h"], ["BTCUSDT", "ETHUSDT", "SOLUSDT"], 250)
+        if error: st.info("Market Pulse is temporarily unavailable.")
+        else:
+            cols = st.columns(3)
+            for col, symbol in zip(cols, ["BTCUSDT", "ETHUSDT", "SOLUSDT"]):
+                frame = candles_to_frame(candles.get(symbol, []))
+                if frame.empty: continue
+                setup = get_setup_score(frame)
+                ticker = tickers.get(symbol, {})
+                px = float(ticker.get("c", [frame.iloc[-1]["close"]])[0])
+                with col:
+                    st.markdown(f"**{symbol.replace('USDT','')} / USDT**")
+                    st.metric("Price", format_price(px))
+                    st.caption(f"JARVIS: {setup['signal']} · Setup Score {setup['score']}/100")
+    except Exception:
+        st.info("Market Pulse will retry on the next refresh.")
+    st.markdown("### JARVIS workspace")
+    a,b,c = st.columns(3)
+    with a:
+        st.markdown("**₿ Crypto**")
+        st.caption("Large-cap crypto charts, indicators, Setup Score, scanner and backtests.")
+    with b:
+        st.markdown("**🔥 Early Radar**")
+        st.caption("New Solana tokens, safety screen, momentum and Potential Score.")
+    with c:
+        st.markdown("**📈 Stocks**")
+        st.caption("Reserved for future stock-market scanning and setups.")
+
+def show_stocks_page() -> None:
+    st.markdown('<div class="eyebrow">FUTURE MODULE</div>', unsafe_allow_html=True)
+    st.subheader("📈 Stocks")
+    st.info("Coming soon — this module is intentionally empty in V8.")
+    st.caption("Later: market pulse, momentum scanner, volume breakouts, watchlists and stock Setup Scores.")
+
+def show_journal_page() -> None:
+    st.markdown('<div class="eyebrow">TRACK RECORD</div>', unsafe_allow_html=True)
+    st.subheader("🧠 Journal / Performance")
+    st.caption("Permanent Supabase history. Only recorded outcomes are shown — no invented performance numbers.")
+    if st.button("⏱️ Update due outcomes", type="primary"):
+        with st.spinner("Checking due predictions…"):
+            updated, checked, errors = evaluate_due_predictions()
+        if updated: st.success(f"Updated {updated} due outcome field(s). ✅")
+        elif checked: st.info("Checked due predictions, but no outcome could be updated right now.")
+        else: st.info("Nothing is due yet. JARVIS starts with the 1-hour checkpoint.")
+        for err in errors[:3]: st.warning(err)
+    journal, error = load_prediction_journal(100)
+    if error: st.warning(f"Journal is not readable right now: {error}")
+    elif journal.empty: st.info("No predictions recorded yet.")
+    else:
+        st.metric("Saved predictions", len(journal))
+        st.dataframe(journal, hide_index=True, width="stretch")
+
+def show_alerts_page() -> None:
+    st.markdown('<div class="eyebrow">NOTIFICATIONS</div>', unsafe_allow_html=True)
+    st.subheader("🔔 Alerts")
+    st.caption("Control which Early Radar candidates may trigger Telegram alerts.")
+    alert_control_panel()
+    st.info("Scanning is still manual in V8. 24/7 background monitoring is a later engine upgrade.")
+
+def show_settings_page() -> None:
+    st.markdown('<div class="eyebrow">SYSTEM TOOLS</div>', unsafe_allow_html=True)
+    st.subheader("⚙️ Settings / Diagnostics")
+    st.caption("Connection tests live here instead of cluttering the normal views.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Database**")
+        if st.button("🔌 Test Supabase", use_container_width=True):
+            ok, detail = supabase_connection_test()
+            st.success("Supabase connected. ✅") if ok else st.error(detail)
+    with c2:
+        st.markdown("**Telegram**")
+        if st.button("📲 Send Telegram test", use_container_width=True):
+            ok, detail = send_telegram_message("🤖 JARVIS ONLINE\n\nTelegram-yhteys toimii.")
+            st.success("Telegram test sent. ✅") if ok else st.error(detail)
+    st.divider()
+    st.caption("Secrets stay in Streamlit Secrets. Never paste secret keys into GitHub code.")
+
+if app_page == "🏠 Dashboard": show_home_dashboard()
+elif app_page == "₿ Crypto": show_market_dashboard()
+elif app_page == "🔥 Early Radar": show_early_radar()
+elif app_page == "📈 Stocks": show_stocks_page()
+elif app_page == "🧠 Journal / Performance": show_journal_page()
+elif app_page == "🔔 Alerts": show_alerts_page()
+else: show_settings_page()
