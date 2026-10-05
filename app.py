@@ -1336,10 +1336,10 @@ def send_telegram_message(message: str) -> tuple[bool, str]:
 
 def telegram_test_panel() -> None:
     st.markdown("### 📲 Telegram alerts")
-    st.caption("Test the private JARVIS → Telegram connection before automatic radar alerts are enabled.")
-    if st.button("📲 Send Telegram test", type="primary", use_container_width=False):
+    st.caption("Test the private JARVIS → Telegram connection.")
+    if st.button("📲 Send Telegram test", use_container_width=False):
         ok, detail = send_telegram_message(
-            "🤖 JARVIS ONLINE\n\nTelegram-yhteys toimii.\n🔥 Early Radar connected.\n\nAutomaattisia trading-alertteja ei ole vielä kytketty päälle."
+            "🤖 JARVIS ONLINE\n\nTelegram-yhteys toimii.\n🔥 Early Radar connected."
         )
         if ok:
             st.success("Testiviesti lähetettiin Telegramiin. Tarkista puhelimesi. ✅")
@@ -1347,13 +1347,67 @@ def telegram_test_panel() -> None:
             st.error(detail)
 
 
+def alert_control_panel() -> tuple[str, int, int]:
+    st.markdown("### 📡 Alert Control")
+    st.caption("Valitse mitä JARVIS saa lähettää Telegramiin tämän Radar-istunnon aikana.")
+    mode = st.radio(
+        "Telegram alert mode",
+        ["⚫ OFF", "🔥 HIGH ONLY", "👀 WATCH + HIGH"],
+        horizontal=True,
+        key="telegram_alert_mode",
+    )
+    min_potential = st.slider("Minimum Potential Score", 50, 95, 75, 1, key="telegram_min_potential")
+    max_risk = st.select_slider(
+        "Maximum accepted risk",
+        options=["LOWER", "MEDIUM", "HIGH"],
+        value="MEDIUM",
+        key="telegram_max_risk",
+    )
+    risk_limit = {"LOWER": 0, "MEDIUM": 1, "HIGH": 2}[max_risk]
+    if mode == "⚫ OFF":
+        st.info("Telegram coin-alertit ovat OFF. Testipainike toimii silti.")
+    else:
+        st.success(f"Telegram coin-alertit: {mode} · Potential ≥ {min_potential} · max risk {max_risk}")
+    return mode, min_potential, risk_limit
+
+
+def format_radar_alert(row: pd.Series) -> str:
+    mc = row.get("Market cap")
+    liq = row.get("Liquidity")
+    vol = row.get("Volume 1h")
+    age = row.get("Age (h)")
+    def money(v):
+        try:
+            v=float(v)
+            if pd.isna(v): return "n/a"
+            if v >= 1_000_000: return f"${v/1_000_000:.2f}M"
+            if v >= 1_000: return f"${v/1_000:.0f}k"
+            return f"${v:.0f}"
+        except Exception: return "n/a"
+    return (
+        f"🚨 JARVIS EARLY RADAR\n\n"
+        f"{row.get('Token','Unknown')} (${row.get('Ticker','?')}) · Solana\n"
+        f"Contract: {row.get('Contract address','?')}\n\n"
+        f"🔥 Potential: {int(row.get('Potential',0))}/100 · {row.get('Interest','')}\n"
+        f"🛡️ Risk: {row.get('Risk','Unknown')}\n"
+        f"💰 Market cap: {money(mc)}\n"
+        f"💧 Liquidity: {money(liq)}\n"
+        f"📊 1h volume: {money(vol)}\n"
+        f"⏱️ Age: {float(age):.1f} h\n\n"
+        f"Why: {row.get('Potential why','')}\n\n"
+        f"MC scenarios: {row.get('MC scenarios','n/a')}\n\n"
+        "⚠️ Early-stage token. Potential Score is not a profit probability or buy recommendation."
+    )
+
+
 def show_early_radar() -> None:
-    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V4</div>', unsafe_allow_html=True)
+    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V5</div>', unsafe_allow_html=True)
     st.subheader("🔥 New Solana token radar")
     st.caption(
         "Discovery + safety + early-interest layer. Potential Score is a transparent attention/momentum heuristic — NOT a probability of profit. Identify tokens by exact contract address."
     )
     telegram_test_panel()
+    alert_mode, alert_min_potential, alert_risk_limit = alert_control_panel()
     st.divider()
     radar = load_solana_early_radar()
     if radar.empty:
@@ -1395,6 +1449,44 @@ def show_early_radar() -> None:
             enriched.append(item)
 
     result = pd.DataFrame(enriched).sort_values(["Potential", "Risk points", "Liquidity"], ascending=[False, True, False])
+
+    risk_rank = {"LOWER": 0, "MEDIUM": 1, "HIGH": 2}
+    eligible = result[(result["Potential"] >= alert_min_potential) & (result["Risk"].map(risk_rank).fillna(99) <= alert_risk_limit)].copy()
+    if alert_mode == "🔥 HIGH ONLY":
+        eligible = eligible[eligible["Interest"].astype(str).str.contains("HIGH", case=False, na=False)]
+    elif alert_mode == "⚫ OFF":
+        eligible = eligible.iloc[0:0]
+
+    if alert_mode != "⚫ OFF":
+        st.markdown("### 🚨 Telegram candidates")
+        st.caption(f"{len(eligible)} token(s) currently pass your alert rules. JARVIS will send them only when you press the button below in V5.")
+        if st.button("📡 Scan now & send matching alerts", type="primary", use_container_width=False):
+            if eligible.empty:
+                st.info("No tokens currently pass your Telegram alert rules.")
+            else:
+                if "sent_contracts" not in st.session_state:
+                    st.session_state.sent_contracts = set()
+                sent = 0
+                skipped = 0
+                errors = []
+                for _, alert_row in eligible.head(5).iterrows():
+                    contract = str(alert_row.get("Contract address", ""))
+                    if contract in st.session_state.sent_contracts:
+                        skipped += 1
+                        continue
+                    ok, detail = send_telegram_message(format_radar_alert(alert_row))
+                    if ok:
+                        st.session_state.sent_contracts.add(contract)
+                        sent += 1
+                    else:
+                        errors.append(detail)
+                if sent:
+                    st.success(f"Sent {sent} new JARVIS alert(s) to Telegram. ✅")
+                if skipped:
+                    st.info(f"Skipped {skipped} token(s) already sent during this app session.")
+                for err in errors[:2]:
+                    st.error(err)
+
     st.markdown("### 🔥 Social / Momentum radar")
     st.caption("Ranks early attention using DEX activity, social-link presence, promotion, age and valuation. Celebrity-name hits are UNVERIFIED until an official post and the exact contract address are matched.")
     st.dataframe(
@@ -1417,8 +1509,8 @@ def show_early_radar() -> None:
         "Top-20 concentration is token-account concentration and can include pools/exchanges, so it is a screening signal rather than proof of insider ownership."
     )
     st.info(
-        "V3 social score is a first-pass proxy, not full social listening yet. A celebrity name only creates an UNVERIFIED catalyst flag. "
-        "The next upgrade is verified X/Reddit/Telegram trend velocity + Telegram alerts; those sources need their own API/bot credentials."
+        "V5 social score is still a first-pass proxy, not full social listening yet. A celebrity name only creates an UNVERIFIED catalyst flag. "
+        "Telegram alerts in V5 are manual scan alerts while this page is open; 24/7 background monitoring is a separate next step."
     )
     st.warning(
         "MC scenarios are arithmetic what-if levels, not price targets or sell recommendations. A 5× scenario means the current market cap multiplied by five; JARVIS is not claiming it will reach that level."
