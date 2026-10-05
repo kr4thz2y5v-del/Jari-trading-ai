@@ -800,6 +800,71 @@ def compare_score_thresholds(frame: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+
+def beginner_explanations(latest: pd.Series) -> list[tuple[str, str, str]]:
+    """Explain the main indicators in simple Finnish."""
+    price = float(latest["close"])
+    ema20 = float(latest["ema20"])
+    ema50 = float(latest["ema50"])
+    ema200 = float(latest["ema200"])
+    rsi = float(latest["rsi"])
+    macd = float(latest["macd"])
+    macd_signal = float(latest["macd_signal"])
+    atr_pct = float(latest["atr_percent"])
+    volume_ratio = float(latest["volume_ratio"])
+
+    if price > ema20 > ema50 > ema200:
+        ema_text = "🟢 Selkeä nousutrendi — hinta ja EMA-linjat ovat nousujärjestyksessä."
+    elif price < ema20 < ema50 < ema200:
+        ema_text = "🔴 Selkeä laskutrendi — hinta ja EMA-linjat ovat laskujärjestyksessä."
+    else:
+        ema_text = "🟡 Sekava trendi — EMA-linjat eivät tällä hetkellä osoita kaikki samaan suuntaan."
+
+    if rsi >= 70:
+        rsi_text = f"🟠 RSI {rsi:.1f} — nousu on ollut voimakasta ja hinta voi olla jo venynyt."
+    elif rsi >= 50:
+        rsi_text = f"🟢 RSI {rsi:.1f} — nousumomentum on tällä hetkellä laskumomentumia vahvempi."
+    elif rsi >= 30:
+        rsi_text = f"🔴 RSI {rsi:.1f} — laskumomentum on tällä hetkellä vahvempi."
+    else:
+        rsi_text = f"🟠 RSI {rsi:.1f} — lasku on ollut voimakasta ja hinta voi olla jo venynyt."
+
+    if macd > macd_signal:
+        macd_text = "🟢 MACD on signal-linjan yläpuolella — momentum tukee tällä hetkellä enemmän nousua."
+    elif macd < macd_signal:
+        macd_text = "🔴 MACD on signal-linjan alapuolella — momentum tukee tällä hetkellä enemmän laskua."
+    else:
+        macd_text = "🟡 MACD ja signal-linja ovat samassa kohdassa — selvää momentum-suuntaa ei ole."
+
+    if atr_pct < 0.35:
+        atr_text = f"🔵 ATR {atr_pct:.2f}% — hinta liikkuu tällä aikavälillä melko rauhallisesti."
+    elif atr_pct <= 2.5:
+        atr_text = f"🟢 ATR {atr_pct:.2f}% — markkinassa on kohtalaisesti liikettä."
+    else:
+        atr_text = f"🟠 ATR {atr_pct:.2f}% — markkina heiluu voimakkaasti, joten myös riski on suurempi."
+
+    if volume_ratio >= 1.5:
+        volume_text = f"🟢 Volume {volume_ratio:.2f}× — kaupankäyntiä on selvästi tavallista enemmän."
+    elif volume_ratio >= 1.0:
+        volume_text = f"🟢 Volume {volume_ratio:.2f}× — kaupankäyntiä on hieman keskimääräistä enemmän."
+    elif volume_ratio >= 0.7:
+        volume_text = f"🟡 Volume {volume_ratio:.2f}× — kaupankäyntiä on hieman tavallista vähemmän."
+    else:
+        volume_text = f"⚪ Volume {volume_ratio:.2f}× — kaupankäynti on tällä hetkellä hiljaista."
+
+    return [
+        ("EMA20 / EMA50 / EMA200", ema_text,
+         "EMA:t näyttävät trendiä eri nopeuksilla: EMA20 reagoi nopeimmin ja EMA200 hitaimmin."),
+        ("RSI (14)", rsi_text,
+         "RSI mittaa viimeaikaisten nousujen ja laskujen voimaa asteikolla 0–100. Se ei ole nousun todennäköisyys."),
+        ("MACD", macd_text,
+         "MACD auttaa arvioimaan momentumin suuntaa. Yksinään se ei tarkoita, että pitäisi ostaa tai myydä."),
+        ("ATR (14)", atr_text,
+         "ATR kertoo hinnan heilunnan suuruudesta, ei liikkeen suunnasta."),
+        ("Volume ratio", volume_text,
+         "1.00× tarkoittaa 20 kynttilän keskimääräistä volyymia. Suuri volume kertoo aktiivisuudesta, ei yksin suunnasta."),
+    ]
+
 def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
     """Create a candlestick price chart with EMA overlays and an RSI panel."""
     figure = make_subplots(
@@ -1102,6 +1167,14 @@ def show_market_dashboard() -> None:
             config={"displayModeBar": False},
         )
     with levels_col:
+        st.subheader("Mitä markkina kertoo?")
+        with st.expander("📘 Aloittelijan tulkinta", expanded=True):
+            for indicator_name, interpretation, explanation in beginner_explanations(latest):
+                st.markdown(f"**{indicator_name}**")
+                st.write(interpretation)
+                st.caption(explanation)
+                st.markdown("---")
+
         st.subheader("Indicator readings")
         for label, column, color in (
             ("Current candle close", "close", "#eaf7ff"),
