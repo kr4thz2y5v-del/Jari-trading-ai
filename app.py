@@ -1008,6 +1008,7 @@ def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
 
 
 DEXSCREENER_API_HOST = "https://api.dexscreener.com"
+SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 
 
 @st.cache_data(ttl=45, show_spinner=False)
@@ -1083,18 +1084,126 @@ def load_solana_early_radar() -> pd.DataFrame:
     return result.sort_values(["Age (h)", "Liquidity"], ascending=[True, False], na_position="last")
 
 
+
+def _rpc_call(method: str, params: list):
+    try:
+        response = requests.post(
+            SOLANA_RPC,
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+            headers={"Content-Type": "application/json", "User-Agent": "JariTradinAi/2.0"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("result")
+    except (requests.RequestException, ValueError, TypeError):
+        return None
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def solana_safety_snapshot(mint: str) -> dict:
+    """Read basic SPL mint authorities and holder concentration from Solana public RPC."""
+    out = {
+        "Mint authority": None,
+        "Freeze authority": None,
+        "Top 20 %": None,
+        "On-chain checked": False,
+    }
+    account = _rpc_call("getAccountInfo", [mint, {"encoding": "jsonParsed", "commitment": "confirmed"}])
+    try:
+        info = (((account or {}).get("value") or {}).get("data") or {}).get("parsed", {}).get("info", {})
+        if info:
+            out["Mint authority"] = info.get("mintAuthority")
+            out["Freeze authority"] = info.get("freezeAuthority")
+            out["On-chain checked"] = True
+    except (AttributeError, TypeError):
+        pass
+
+    supply_result = _rpc_call("getTokenSupply", [mint, {"commitment": "confirmed"}])
+    largest_result = _rpc_call("getTokenLargestAccounts", [mint, {"commitment": "confirmed"}])
+    try:
+        supply_raw = float(((supply_result or {}).get("value") or {}).get("amount") or 0)
+        accounts = (largest_result or {}).get("value") or []
+        largest_raw = sum(float(x.get("amount") or 0) for x in accounts[:20])
+        if supply_raw > 0:
+            out["Top 20 %"] = (largest_raw / supply_raw) * 100
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return out
+
+
+def safety_assessment(row: pd.Series, chain: dict) -> tuple[int, str, list[str]]:
+    """Transparent risk heuristic. Lower score means fewer observed warning flags, not 'safe'."""
+    risk = 0
+    reasons = []
+    liquidity = float(row.get("Liquidity") or 0)
+    market_cap = float(row.get("Market cap") or row.get("FDV") or 0)
+    volume = float(row.get("Volume 1h") or 0)
+    buys = float(row.get("Buys 1h") or 0)
+    sells = float(row.get("Sells 1h") or 0)
+    age = float(row.get("Age (h)") or 0)
+
+    if liquidity < 10_000:
+        risk += 30; reasons.append("very low liquidity")
+    elif liquidity < 25_000:
+        risk += 18; reasons.append("low liquidity")
+    elif liquidity >= 100_000:
+        reasons.append("stronger liquidity")
+
+    if market_cap > 0:
+        liq_ratio = liquidity / market_cap
+        if liq_ratio < 0.03:
+            risk += 22; reasons.append("liquidity is tiny vs valuation")
+        elif liq_ratio < 0.08:
+            risk += 10; reasons.append("thin liquidity vs valuation")
+        elif liq_ratio >= 0.20:
+            reasons.append("healthy liquidity/valuation ratio")
+
+    if age < 1:
+        risk += 8; reasons.append("less than 1 hour old")
+    if volume < 2_000:
+        risk += 8; reasons.append("little 1h trading activity")
+    if buys + sells >= 10 and sells > buys * 2.5:
+        risk += 10; reasons.append("sells heavily exceed buys")
+
+    if chain.get("On-chain checked"):
+        if chain.get("Mint authority"):
+            risk += 18; reasons.append("mint authority still active")
+        else:
+            reasons.append("mint authority revoked")
+        if chain.get("Freeze authority"):
+            risk += 18; reasons.append("freeze authority still active")
+        else:
+            reasons.append("freeze authority revoked")
+    else:
+        reasons.append("mint authorities not verified")
+
+    top20 = chain.get("Top 20 %")
+    if top20 is not None:
+        if top20 >= 80:
+            risk += 22; reasons.append(f"top 20 token accounts hold {top20:.0f}%")
+        elif top20 >= 60:
+            risk += 12; reasons.append(f"top 20 token accounts hold {top20:.0f}%")
+        else:
+            reasons.append(f"top 20 token accounts hold {top20:.0f}%")
+
+    risk = min(100, int(risk))
+    label = "🔴 HIGH" if risk >= 55 else "🟡 MEDIUM" if risk >= 25 else "🟢 LOWER"
+    return risk, label, reasons
+
+
 def show_early_radar() -> None:
-    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V1</div>', unsafe_allow_html=True)
+    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V2</div>', unsafe_allow_html=True)
     st.subheader("🔥 New Solana token radar")
     st.caption(
-        "Discovery feed from recent DEX Screener token profiles. Always identify a token by its contract address, not only by name or ticker."
+        "Discovery + safety layer. Identify every token by its exact Solana contract/mint address — names and tickers can be copied."
     )
     radar = load_solana_early_radar()
     if radar.empty:
         st.warning("Early Radar did not receive token data right now. Try refreshing in a moment.")
         return
 
-    max_age = st.slider("Maximum pair age", 1, 168, 48, help="48 hours = only pairs created during roughly the last two days.")
+    max_age = st.slider("Maximum pair age", 1, 168, 48, help="48 hours = pairs created during roughly the last two days.")
     min_liquidity = st.select_slider(
         "Minimum liquidity",
         options=[0, 5000, 10000, 25000, 50000, 100000, 250000],
@@ -1103,22 +1212,46 @@ def show_early_radar() -> None:
     )
     view = radar[(radar["Age (h)"].fillna(10**9) <= max_age) & (radar["Liquidity"].fillna(0) >= min_liquidity)].copy()
     if view.empty:
-        st.info("No tokens currently match these age and liquidity filters. Try widening the filters.")
-    else:
-        st.dataframe(
-            view, hide_index=True, width="stretch",
-            column_config={
-                "Age (h)": st.column_config.NumberColumn("Age", format="%.1f h"),
-                "Market cap": st.column_config.NumberColumn("Market cap", format="$%.0f"),
-                "FDV": st.column_config.NumberColumn("FDV", format="$%.0f"),
-                "Liquidity": st.column_config.NumberColumn("Liquidity", format="$%.0f"),
-                "Volume 1h": st.column_config.NumberColumn("Volume 1h", format="$%.0f"),
-                "DEX Screener": st.column_config.LinkColumn("Chart"),
-            },
-        )
+        st.info("No tokens currently match these filters. Try widening them.")
+        return
+
+    st.markdown("### 🛡️ Safety / Rug screen")
+    st.caption("Checking public Solana on-chain data. This is a warning-flag screen, not a guarantee that a token is safe.")
+    enriched = []
+    with st.spinner("JARVIS is checking mint authorities and holder concentration…"):
+        for _, row in view.head(12).iterrows():
+            chain = solana_safety_snapshot(str(row["Contract address"]))
+            score, label, reasons = safety_assessment(row, chain)
+            item = row.to_dict()
+            item["Risk"] = label
+            item["Risk points"] = score
+            item["Mint authority"] = "ACTIVE ⚠️" if chain.get("Mint authority") else ("Revoked ✓" if chain.get("On-chain checked") else "Unknown")
+            item["Freeze authority"] = "ACTIVE ⚠️" if chain.get("Freeze authority") else ("Revoked ✓" if chain.get("On-chain checked") else "Unknown")
+            item["Top 20 holders"] = chain.get("Top 20 %")
+            item["Why"] = " · ".join(reasons)
+            enriched.append(item)
+
+    result = pd.DataFrame(enriched).sort_values(["Risk points", "Liquidity"], ascending=[True, False])
+    st.dataframe(
+        result[["Risk", "Token", "Ticker", "Contract address", "Age (h)", "Market cap", "Liquidity", "Volume 1h", "Buys 1h", "Sells 1h", "Mint authority", "Freeze authority", "Top 20 holders", "Why", "DEX Screener"]],
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Age (h)": st.column_config.NumberColumn("Age", format="%.1f h"),
+            "Market cap": st.column_config.NumberColumn("Market cap", format="$%.0f"),
+            "Liquidity": st.column_config.NumberColumn("Liquidity", format="$%.0f"),
+            "Volume 1h": st.column_config.NumberColumn("Volume 1h", format="$%.0f"),
+            "Top 20 holders": st.column_config.NumberColumn("Top 20", format="%.1f%%"),
+            "DEX Screener": st.column_config.LinkColumn("Chart"),
+        },
+    )
+
+    st.warning(
+        "LOWER risk means only that JARVIS observed fewer of these specific warning flags. It does NOT mean safe, genuine, non-rug, or a good investment. "
+        "Top-20 concentration is token-account concentration and can include pools/exchanges, so it is a screening signal rather than proof of insider ownership."
+    )
     st.info(
-        "V1 does NOT yet label a token safe, genuine, celebrity-backed, or high-potential. "
-        "The next layer will verify risk/on-chain signals before JARVIS is allowed to rank or alert on tokens."
+        "Next: Social/Celebrity verification + trend velocity + Potential Score. JARVIS will keep safety risk separate from upside potential."
     )
 
 
