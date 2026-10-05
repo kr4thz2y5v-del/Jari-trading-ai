@@ -1579,4 +1579,7 @@ def show_market_dashboard() -> None:
     )
 
 
-show_market_dashboard()
+if app_page == "🔥 Early Radar":
+    show_early_radar()
+else:
+    show_market_dashboard()
