@@ -1007,6 +1007,121 @@ def build_price_chart(frame: pd.DataFrame, symbol: str) -> go.Figure:
     return figure
 
 
+DEXSCREENER_API_HOST = "https://api.dexscreener.com"
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def load_solana_early_radar() -> pd.DataFrame:
+    """Discover recent Solana token profiles and enrich them with DEX market data."""
+    try:
+        response = requests.get(
+            f"{DEXSCREENER_API_HOST}/token-profiles/latest/v1",
+            headers={"User-Agent": "JariTradinAi/1.0"},
+            timeout=12,
+        )
+        response.raise_for_status()
+        profiles = response.json()
+    except (requests.RequestException, ValueError):
+        return pd.DataFrame()
+
+    solana = [p for p in profiles if str(p.get("chainId", "")).lower() == "solana"][:24]
+    rows = []
+    now_ms = datetime.now().timestamp() * 1000
+
+    def enrich(profile):
+        address = profile.get("tokenAddress", "")
+        if not address:
+            return None
+        try:
+            r = requests.get(
+                f"{DEXSCREENER_API_HOST}/token-pairs/v1/solana/{address}",
+                headers={"User-Agent": "JariTradinAi/1.0"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            pairs = r.json()
+            if not isinstance(pairs, list) or not pairs:
+                return None
+            pair = max(pairs, key=lambda x: float((x.get("liquidity") or {}).get("usd") or 0))
+            base = pair.get("baseToken") or {}
+            created = pair.get("pairCreatedAt")
+            age_hours = ((now_ms - float(created)) / 3_600_000) if created else None
+            tx_h1 = (pair.get("txns") or {}).get("h1") or {}
+            vol = pair.get("volume") or {}
+            liquidity = pair.get("liquidity") or {}
+            market_cap = pair.get("marketCap")
+            fdv = pair.get("fdv")
+            links = profile.get("links") or []
+            socials = ", ".join(filter(None, [x.get("type") or x.get("label") for x in links])) or "—"
+            return {
+                "Token": base.get("name") or "Unknown",
+                "Ticker": base.get("symbol") or "—",
+                "Contract address": address,
+                "Age (h)": age_hours,
+                "Market cap": market_cap,
+                "FDV": fdv,
+                "Liquidity": liquidity.get("usd"),
+                "Volume 1h": vol.get("h1"),
+                "Buys 1h": tx_h1.get("buys"),
+                "Sells 1h": tx_h1.get("sells"),
+                "Social links": socials,
+                "DEX Screener": pair.get("url") or profile.get("url"),
+            }
+        except (requests.RequestException, ValueError, TypeError):
+            return None
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [pool.submit(enrich, profile) for profile in solana]
+        for future in as_completed(futures):
+            item = future.result()
+            if item:
+                rows.append(item)
+
+    if not rows:
+        return pd.DataFrame()
+    result = pd.DataFrame(rows)
+    return result.sort_values(["Age (h)", "Liquidity"], ascending=[True, False], na_position="last")
+
+
+def show_early_radar() -> None:
+    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V1</div>', unsafe_allow_html=True)
+    st.subheader("🔥 New Solana token radar")
+    st.caption(
+        "Discovery feed from recent DEX Screener token profiles. Always identify a token by its contract address, not only by name or ticker."
+    )
+    radar = load_solana_early_radar()
+    if radar.empty:
+        st.warning("Early Radar did not receive token data right now. Try refreshing in a moment.")
+        return
+
+    max_age = st.slider("Maximum pair age", 1, 168, 48, help="48 hours = only pairs created during roughly the last two days.")
+    min_liquidity = st.select_slider(
+        "Minimum liquidity",
+        options=[0, 5000, 10000, 25000, 50000, 100000, 250000],
+        value=10000,
+        format_func=lambda x: f"${x:,.0f}",
+    )
+    view = radar[(radar["Age (h)"].fillna(10**9) <= max_age) & (radar["Liquidity"].fillna(0) >= min_liquidity)].copy()
+    if view.empty:
+        st.info("No tokens currently match these age and liquidity filters. Try widening the filters.")
+    else:
+        st.dataframe(
+            view, hide_index=True, width="stretch",
+            column_config={
+                "Age (h)": st.column_config.NumberColumn("Age", format="%.1f h"),
+                "Market cap": st.column_config.NumberColumn("Market cap", format="$%.0f"),
+                "FDV": st.column_config.NumberColumn("FDV", format="$%.0f"),
+                "Liquidity": st.column_config.NumberColumn("Liquidity", format="$%.0f"),
+                "Volume 1h": st.column_config.NumberColumn("Volume 1h", format="$%.0f"),
+                "DEX Screener": st.column_config.LinkColumn("Chart"),
+            },
+        )
+    st.info(
+        "V1 does NOT yet label a token safe, genuine, celebrity-backed, or high-potential. "
+        "The next layer will verify risk/on-chain signals before JARVIS is allowed to rank or alert on tokens."
+    )
+
+
 st.markdown(
     """
     <div class="jari-header">
@@ -1062,6 +1177,9 @@ with st.sidebar:
     st.caption("All market data comes from Kraken's public API. No API key is used.")
 
 selected_interval = TIMEFRAMES[selected_timeframe_label]
+
+st.sidebar.divider()
+app_page = st.sidebar.radio("JARVIS module", ["Market Dashboard", "🔥 Early Radar"], index=0)
 
 
 @st.fragment(run_every=f"{refresh_seconds}s")
