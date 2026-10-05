@@ -1168,12 +1168,11 @@ def show_market_dashboard() -> None:
         )
     with levels_col:
         st.subheader("Mitä markkina kertoo?")
-        with st.expander("📘 Aloittelijan tulkinta", expanded=True):
-            for indicator_name, interpretation, explanation in beginner_explanations(latest):
-                st.markdown(f"**{indicator_name}**")
+        st.caption("Paina indikaattoria avataksesi selityksen.")
+        for indicator_name, interpretation, explanation in beginner_explanations(latest):
+            with st.expander(indicator_name, expanded=False):
                 st.write(interpretation)
                 st.caption(explanation)
-                st.markdown("---")
 
         st.subheader("Indicator readings")
         for label, column, color in (
