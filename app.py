@@ -1400,13 +1400,131 @@ def format_radar_alert(row: pd.Series) -> str:
     )
 
 
+
+
+# ----------------------------- Supabase Prediction Journal -----------------------------
+def _supabase_config() -> tuple[str, str]:
+    try:
+        url = str(st.secrets["SUPABASE_URL"]).strip().rstrip("/")
+        key = str(st.secrets["SUPABASE_SECRET_KEY"]).strip()
+        return url, key
+    except Exception:
+        return "", ""
+
+
+def _supabase_request(method: str, path: str, *, params=None, json=None, prefer: str | None = None):
+    url, key = _supabase_config()
+    if not url or not key:
+        raise RuntimeError("SUPABASE_URL or SUPABASE_SECRET_KEY is missing from Streamlit Secrets.")
+    headers = {"apikey": key, "Content-Type": "application/json"}
+    if prefer:
+        headers["Prefer"] = prefer
+    response = requests.request(method, f"{url}/rest/v1/{path}", headers=headers, params=params, json=json, timeout=15)
+    if not response.ok:
+        detail = response.text[:500]
+        raise RuntimeError(f"Supabase HTTP {response.status_code}: {detail}")
+    if not response.text.strip():
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        return response.text
+
+
+def supabase_connection_test() -> tuple[bool, str]:
+    try:
+        rows = _supabase_request("GET", "predictions", params={"select": "id", "limit": "1"})
+        return True, f"Connected to predictions table ({len(rows or [])} row test)."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def save_radar_prediction(row: pd.Series) -> tuple[bool, str]:
+    contract = str(row.get("Contract address") or "").strip()
+    if not contract:
+        return False, "Missing contract address."
+    try:
+        # Do not create the same contract/score observation repeatedly during a short test cycle.
+        existing = _supabase_request(
+            "GET", "predictions",
+            params={"select": "id,created_at", "contract_address": f"eq.{contract}", "order": "created_at.desc", "limit": "1"},
+        ) or []
+        if existing:
+            return False, "Already journaled for this contract."
+
+        def number(value):
+            try:
+                value = float(value)
+                return None if pd.isna(value) else value
+            except Exception:
+                return None
+
+        payload = {
+            "market_type": "MEME",
+            "symbol": str(row.get("Ticker") or row.get("Token") or "UNKNOWN")[:80],
+            "contract_address": contract,
+            "signal_type": str(row.get("Interest") or "RADAR")[:80],
+            "score": number(row.get("Potential")),
+            "reference_market_cap": number(row.get("Market cap") or row.get("FDV")),
+            "liquidity": number(row.get("Liquidity")),
+            "risk_level": str(row.get("Risk") or "UNKNOWN")[:80],
+            "timeframe": "Early Radar",
+            "notes": (
+                f"Token={row.get('Token','')} | age_h={row.get('Age (h)','')} | "
+                f"vol_1h={row.get('Volume 1h','')} | buys_1h={row.get('Buys 1h','')} | "
+                f"sells_1h={row.get('Sells 1h','')} | {row.get('Potential why','')}"
+            )[:1800],
+        }
+        created = _supabase_request("POST", "predictions", json=payload, prefer="return=representation")
+        if created:
+            return True, f"Saved prediction #{created[0].get('id', '?')}."
+        return True, "Saved prediction."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def load_prediction_journal(limit: int = 100) -> tuple[pd.DataFrame, str | None]:
+    try:
+        rows = _supabase_request(
+            "GET", "predictions",
+            params={
+                "select": "id,created_at,market_type,symbol,contract_address,signal_type,score,reference_price,reference_market_cap,liquidity,risk_level,timeframe,return_1h,return_6h,return_24h,return_3d,return_7d",
+                "order": "created_at.desc", "limit": str(limit),
+            },
+        ) or []
+        return pd.DataFrame(rows), None
+    except Exception as exc:
+        return pd.DataFrame(), str(exc)
+
+
+def prediction_journal_panel() -> None:
+    st.markdown("### 🧠 Prediction Journal · V6")
+    st.caption("Permanent Supabase journal. A saved row records what JARVIS saw at signal time; future outcome fields will be filled by the evaluator in the next stage.")
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        if st.button("🔌 Test Supabase", use_container_width=True):
+            ok, detail = supabase_connection_test()
+            if ok: st.success("Supabase connected. ✅")
+            else: st.error(detail)
+    journal, error = load_prediction_journal(100)
+    if error:
+        st.warning(f"Journal is not readable yet: {error}")
+        return
+    if journal.empty:
+        st.info("Prediction Journal is empty. Save a Radar candidate below to create the first real observation.")
+        return
+    st.metric("Saved predictions", len(journal))
+    st.dataframe(journal, hide_index=True, width="stretch")
+
+
 def show_early_radar() -> None:
-    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V5</div>', unsafe_allow_html=True)
+    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V6</div>', unsafe_allow_html=True)
     st.subheader("🔥 New Solana token radar")
     st.caption(
         "Discovery + safety + early-interest layer. Potential Score is a transparent attention/momentum heuristic — NOT a probability of profit. Identify tokens by exact contract address."
     )
     telegram_test_panel()
+    prediction_journal_panel()
     alert_mode, alert_min_potential, alert_risk_limit = alert_control_panel()
     st.divider()
     radar = load_solana_early_radar()
@@ -1449,6 +1567,32 @@ def show_early_radar() -> None:
             enriched.append(item)
 
     result = pd.DataFrame(enriched).sort_values(["Potential", "Risk points", "Liquidity"], ascending=[False, True, False])
+
+    st.markdown("### 💾 Journal current Radar signals")
+    st.caption("This stores the current top Radar observations in Supabase exactly as they are now. It does not buy anything.")
+    save_min = st.slider("Journal minimum Potential", 40, 95, 70, 1, key="journal_min_potential")
+    journal_candidates = result[result["Potential"] >= save_min].copy()
+    st.caption(f"{len(journal_candidates)} current candidate(s) meet Potential ≥ {save_min}.")
+    if st.button("💾 Save matching predictions", use_container_width=False):
+        if journal_candidates.empty:
+            st.info("No current Radar candidates meet the journal threshold.")
+        else:
+            saved = skipped = 0
+            errors = []
+            for _, journal_row in journal_candidates.head(10).iterrows():
+                ok, detail = save_radar_prediction(journal_row)
+                if ok:
+                    saved += 1
+                elif "Already journaled" in detail:
+                    skipped += 1
+                else:
+                    errors.append(detail)
+            if saved:
+                st.success(f"Saved {saved} new prediction(s) permanently to Supabase. ✅")
+            if skipped:
+                st.info(f"Skipped {skipped} contract(s) already in the journal.")
+            for err in errors[:2]:
+                st.error(err)
 
     risk_rank = {"LOWER": 0, "MEDIUM": 1, "HIGH": 2}
     eligible = result[(result["Potential"] >= alert_min_potential) & (result["Risk"].map(risk_rank).fillna(99) <= alert_risk_limit)].copy()
