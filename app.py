@@ -1308,12 +1308,53 @@ def market_cap_scenarios(market_cap) -> str:
     return " · ".join(targets)
 
 
+def send_telegram_message(message: str) -> tuple[bool, str]:
+    """Send a message using credentials stored in Streamlit Secrets."""
+    try:
+        bot_token = str(st.secrets["TELEGRAM_BOT_TOKEN"]).strip()
+        chat_id = str(st.secrets["TELEGRAM_CHAT_ID"]).strip()
+    except Exception:
+        return False, "Telegram Secrets are missing. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Streamlit Secrets."
+
+    if not bot_token or not chat_id:
+        return False, "Telegram bot token or chat ID is empty."
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": message},
+            timeout=12,
+        )
+        payload = response.json()
+        if response.ok and payload.get("ok"):
+            return True, "Telegram message sent."
+        description = payload.get("description", f"HTTP {response.status_code}")
+        return False, f"Telegram rejected the message: {description}"
+    except Exception as exc:
+        return False, f"Telegram connection failed: {exc}"
+
+
+def telegram_test_panel() -> None:
+    st.markdown("### 📲 Telegram alerts")
+    st.caption("Test the private JARVIS → Telegram connection before automatic radar alerts are enabled.")
+    if st.button("📲 Send Telegram test", type="primary", use_container_width=False):
+        ok, detail = send_telegram_message(
+            "🤖 JARVIS ONLINE\n\nTelegram-yhteys toimii.\n🔥 Early Radar connected.\n\nAutomaattisia trading-alertteja ei ole vielä kytketty päälle."
+        )
+        if ok:
+            st.success("Testiviesti lähetettiin Telegramiin. Tarkista puhelimesi. ✅")
+        else:
+            st.error(detail)
+
+
 def show_early_radar() -> None:
-    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V3</div>', unsafe_allow_html=True)
+    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V4</div>', unsafe_allow_html=True)
     st.subheader("🔥 New Solana token radar")
     st.caption(
         "Discovery + safety + early-interest layer. Potential Score is a transparent attention/momentum heuristic — NOT a probability of profit. Identify tokens by exact contract address."
     )
+    telegram_test_panel()
+    st.divider()
     radar = load_solana_early_radar()
     if radar.empty:
         st.warning("Early Radar did not receive token data right now. Try refreshing in a moment.")
