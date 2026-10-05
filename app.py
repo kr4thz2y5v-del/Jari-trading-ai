@@ -1079,6 +1079,7 @@ def load_solana_early_radar() -> pd.DataFrame:
                 "Age (h)": age_hours,
                 "Market cap": market_cap,
                 "FDV": fdv,
+                "Price USD": pair.get("priceUsd"),
                 "Liquidity": liquidity.get("usd"),
                 "Volume 1h": vol.get("h1"),
                 "Buys 1h": tx_h1.get("buys"),
@@ -1465,6 +1466,7 @@ def save_radar_prediction(row: pd.Series) -> tuple[bool, str]:
             "contract_address": contract,
             "signal_type": str(row.get("Interest") or "RADAR")[:80],
             "score": number(row.get("Potential")),
+            "reference_price": number(row.get("Price USD")),
             "reference_market_cap": number(row.get("Market cap") or row.get("FDV")),
             "liquidity": number(row.get("Liquidity")),
             "risk_level": str(row.get("Risk") or "UNKNOWN")[:80],
@@ -1497,15 +1499,100 @@ def load_prediction_journal(limit: int = 100) -> tuple[pd.DataFrame, str | None]
         return pd.DataFrame(), str(exc)
 
 
+def _parse_supabase_time(value) -> datetime | None:
+    try:
+        dt = pd.to_datetime(value, utc=True)
+        return dt.to_pydatetime()
+    except Exception:
+        return None
+
+
+def _dex_snapshot(contract: str) -> dict:
+    try:
+        r = requests.get(
+            f"{DEXSCREENER_API_HOST}/token-pairs/v1/solana/{contract}",
+            headers={"User-Agent": "JariTradinAi/1.0"}, timeout=12,
+        )
+        r.raise_for_status()
+        pairs = r.json()
+        if not isinstance(pairs, list) or not pairs:
+            return {}
+        pair = max(pairs, key=lambda x: float((x.get("liquidity") or {}).get("usd") or 0))
+        def num(v):
+            try: return float(v)
+            except Exception: return None
+        return {"price": num(pair.get("priceUsd")), "market_cap": num(pair.get("marketCap") or pair.get("fdv"))}
+    except Exception:
+        return {}
+
+
+def evaluate_due_predictions() -> tuple[int, int, list[str]]:
+    """Fill due 1h/6h/24h/3d/7d snapshots. Returns updated fields, checked rows, errors."""
+    try:
+        rows = _supabase_request(
+            "GET", "predictions",
+            params={"select": "id,created_at,market_type,contract_address,reference_price,reference_market_cap,price_1h,price_6h,price_24h,price_3d,price_7d,return_1h,return_6h,return_24h,return_3d,return_7d", "market_type": "eq.MEME", "order": "created_at.asc", "limit": "250"},
+        ) or []
+    except Exception as exc:
+        return 0, 0, [str(exc)]
+
+    now = datetime.now(timezone.utc)
+    horizons = [("1h",1),("6h",6),("24h",24),("3d",72),("7d",168)]
+    updated = checked = 0
+    errors=[]
+    for row in rows:
+        created=_parse_supabase_time(row.get("created_at"))
+        contract=str(row.get("contract_address") or "").strip()
+        if not created or not contract: continue
+        due=[name for name,hours in horizons if (now-created).total_seconds() >= hours*3600 and row.get(f"price_{name}") is None]
+        if not due: continue
+        checked += 1
+        snap=_dex_snapshot(contract)
+        current_price=snap.get("price")
+        current_mc=snap.get("market_cap")
+        if current_price is None and current_mc is None:
+            errors.append(f"#{row.get('id')}: no current DEX data")
+            continue
+        ref_price=row.get("reference_price")
+        ref_mc=row.get("reference_market_cap")
+        try: ref_price=float(ref_price) if ref_price is not None else None
+        except Exception: ref_price=None
+        try: ref_mc=float(ref_mc) if ref_mc is not None else None
+        except Exception: ref_mc=None
+        ret=None
+        if ref_price and current_price is not None:
+            ret=(current_price/ref_price-1)*100
+        elif ref_mc and current_mc is not None:
+            ret=(current_mc/ref_mc-1)*100
+        patch={}
+        for name in due:
+            patch[f"price_{name}"]=current_price
+            patch[f"return_{name}"]=ret
+        try:
+            _supabase_request("PATCH", "predictions", params={"id":f"eq.{row['id']}"}, json=patch, prefer="return=minimal")
+            updated += len(due)
+        except Exception as exc:
+            errors.append(f"#{row.get('id')}: {exc}")
+    return updated, checked, errors
+
+
 def prediction_journal_panel() -> None:
-    st.markdown("### 🧠 Prediction Journal · V6")
-    st.caption("Permanent Supabase journal. A saved row records what JARVIS saw at signal time; future outcome fields will be filled by the evaluator in the next stage.")
-    c1, c2 = st.columns([1, 3])
+    st.markdown("### 🧠 Prediction Journal · V7")
+    st.caption("Permanent Supabase journal + outcome tracker. Due snapshots are written at 1h, 6h, 24h, 3d and 7d. Returns use token price when a reference price exists; older V6 rows fall back to market-cap change.")
+    c1, c2 = st.columns(2)
     with c1:
         if st.button("🔌 Test Supabase", use_container_width=True):
             ok, detail = supabase_connection_test()
             if ok: st.success("Supabase connected. ✅")
             else: st.error(detail)
+    with c2:
+        if st.button("⏱️ Update due outcomes", use_container_width=True):
+            with st.spinner("Checking due predictions…"):
+                updated, checked, errors = evaluate_due_predictions()
+            if updated: st.success(f"Updated {updated} due outcome field(s). ✅")
+            elif checked: st.info("Checked due predictions, but no outcome could be updated right now.")
+            else: st.info("Nothing is due yet. JARVIS will start with the 1-hour checkpoint.")
+            for err in errors[:3]: st.warning(err)
     journal, error = load_prediction_journal(100)
     if error:
         st.warning(f"Journal is not readable yet: {error}")
@@ -1516,9 +1603,8 @@ def prediction_journal_panel() -> None:
     st.metric("Saved predictions", len(journal))
     st.dataframe(journal, hide_index=True, width="stretch")
 
-
 def show_early_radar() -> None:
-    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V6</div>', unsafe_allow_html=True)
+    st.markdown('<div class="eyebrow"><span class="live-dot"></span>JARVIS EARLY RADAR · V7</div>', unsafe_allow_html=True)
     st.subheader("🔥 New Solana token radar")
     st.caption(
         "Discovery + safety + early-interest layer. Potential Score is a transparent attention/momentum heuristic — NOT a probability of profit. Identify tokens by exact contract address."
