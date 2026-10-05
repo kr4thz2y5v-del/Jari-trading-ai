@@ -2194,10 +2194,10 @@ def show_home_dashboard() -> None:
     with c3:
         journal, err = load_prediction_journal(100)
         st.metric("Saved predictions", len(journal) if not err else "—")
-    with c4: st.metric("Stocks", "COMING SOON")
+    with c4: st.metric("Stocks", "PLANNED")
     st.markdown("### Market Pulse")
     try:
-        tickers, candles, error = load_market_snapshot(TIMEFRAMES["1h"], ["BTCUSDT", "ETHUSDT", "SOLUSDT"], 250)
+        tickers, candles, error = load_market_snapshot(TIMEFRAMES["1 hour"], ("BTCUSDT", "ETHUSDT", "SOLUSDT"), 250)
         if error: st.info("Market Pulse is temporarily unavailable.")
         else:
             cols = st.columns(3)
@@ -2210,9 +2210,9 @@ def show_home_dashboard() -> None:
                 with col:
                     st.markdown(f"**{symbol.replace('USDT','')} / USDT**")
                     st.metric("Price", format_price(px))
-                    st.caption(f"JARVIS: {setup['signal']} · Setup Score {setup['score']}/100")
+                    st.caption(f"JARVIS: {setup['direction']} · Setup Score {setup['score']}/100")
     except Exception:
-        st.info("Market Pulse will retry on the next refresh.")
+        st.info("Market Pulse is temporarily unavailable. Open Crypto to view the full market scanner.")
     st.markdown("### JARVIS workspace")
     a,b,c = st.columns(3)
     with a:
