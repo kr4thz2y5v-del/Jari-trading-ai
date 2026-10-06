@@ -1354,23 +1354,38 @@ def telegram_test_panel() -> None:
 
 def alert_control_panel() -> tuple[str, int, int]:
     st.markdown("### 📡 Alert Control")
-    st.caption("Valitse mitä JARVIS saa lähettää Telegramiin tämän Radar-istunnon aikana.")
+    st.caption("Asetukset säilyvät nyt, vaikka vaihdat JARVISin osiosta toiseen.")
+
+    # Persistent shadow values: Streamlit may clean up widget keys when a widget
+    # is not rendered on the current page, so alert rules live in separate keys.
+    st.session_state.setdefault("alert_mode_saved", "⚫ OFF")
+    st.session_state.setdefault("alert_min_saved", 75)
+    st.session_state.setdefault("alert_risk_saved", "MEDIUM")
+
+    mode_options = ["⚫ OFF", "🔥 HIGH ONLY", "👀 WATCH + HIGH"]
+    risk_options = ["LOWER", "MEDIUM", "HIGH"]
     mode = st.radio(
-        "Telegram alert mode",
-        ["⚫ OFF", "🔥 HIGH ONLY", "👀 WATCH + HIGH"],
-        horizontal=True,
-        key="telegram_alert_mode",
+        "Telegram alert mode", mode_options, horizontal=True,
+        index=mode_options.index(st.session_state["alert_mode_saved"]),
+        key="telegram_alert_mode_widget",
     )
-    min_potential = st.slider("Minimum Potential Score", 50, 95, 75, 1, key="telegram_min_potential")
+    min_potential = st.slider(
+        "Minimum Potential Score", 50, 95,
+        int(st.session_state["alert_min_saved"]), 1,
+        key="telegram_min_potential_widget",
+    )
     max_risk = st.select_slider(
-        "Maximum accepted risk",
-        options=["LOWER", "MEDIUM", "HIGH"],
-        value="MEDIUM",
-        key="telegram_max_risk",
+        "Maximum accepted risk", options=risk_options,
+        value=st.session_state["alert_risk_saved"],
+        key="telegram_max_risk_widget",
     )
+    st.session_state["alert_mode_saved"] = mode
+    st.session_state["alert_min_saved"] = int(min_potential)
+    st.session_state["alert_risk_saved"] = max_risk
+
     risk_limit = {"LOWER": 0, "MEDIUM": 1, "HIGH": 2}[max_risk]
     if mode == "⚫ OFF":
-        st.info("Telegram coin-alertit ovat OFF. Testipainike toimii silti.")
+        st.info("Telegram coin-alertit ovat OFF.")
     else:
         st.success(f"Telegram coin-alertit: {mode} · Potential ≥ {min_potential} · max risk {max_risk}")
     return mode, min_potential, risk_limit
@@ -1614,9 +1629,9 @@ def show_early_radar() -> None:
         "Discovery + safety + early-interest layer. Potential Score is a transparent attention/momentum heuristic — NOT a probability of profit. Identify tokens by exact contract address."
     )
     # V8 facelift: technical tools live on their own pages.
-    alert_mode = st.session_state.get("telegram_alert_mode", "⚫ OFF")
-    alert_min_potential = st.session_state.get("telegram_min_potential", 75)
-    max_risk = st.session_state.get("telegram_max_risk", "MEDIUM")
+    alert_mode = st.session_state.get("alert_mode_saved", "⚫ OFF")
+    alert_min_potential = st.session_state.get("alert_min_saved", 75)
+    max_risk = st.session_state.get("alert_risk_saved", "MEDIUM")
     alert_risk_limit = {"LOWER": 0, "MEDIUM": 1, "HIGH": 2}.get(max_risk, 1)
     radar = load_solana_early_radar()
     if radar.empty:
@@ -2253,8 +2268,14 @@ def show_alerts_page() -> None:
     st.markdown('<div class="eyebrow">NOTIFICATIONS</div>', unsafe_allow_html=True)
     st.subheader("🔔 Alerts")
     st.caption("Control which Early Radar candidates may trigger Telegram alerts.")
-    alert_control_panel()
-    st.info("Scanning is still manual in V8. 24/7 background monitoring is a later engine upgrade.")
+    mode, min_potential, risk_limit = alert_control_panel()
+    st.markdown("### 🚨 Send alerts")
+    st.caption("Alert rules above are persistent. The actual Radar scan is still manual in this facelift version.")
+    if mode == "⚫ OFF":
+        st.info("Turn Telegram alert mode on first. Your selection will stay saved while you move between pages.")
+    else:
+        st.success(f"Rules armed: {mode} · Potential ≥ {min_potential}. Open Early Radar and press ‘Scan now & send matching alerts’. The settings will no longer reset.")
+    st.info("24/7 background monitoring is a later engine upgrade.")
 
 def show_settings_page() -> None:
     st.markdown('<div class="eyebrow">SYSTEM TOOLS</div>', unsafe_allow_html=True)
